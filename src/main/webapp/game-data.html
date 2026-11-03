@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>游戏数据 · 派蒙社</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+<div class="container">
+    <div class="grid grid-2">
+        <div>
+            <div class="card">
+                <div class="card-title">我的游戏账号 <small id="uid-hint"></small></div>
+                <div id="game-body"><div class="empty">还没有绑定游戏 UID</div></div>
+            </div>
+            <div class="card">
+                <div class="card-title">
+                    <span>我的角色</span>
+                    <small id="char-count"></small>
+                </div>
+                <div id="character-list"><div class="empty">还没有录入角色</div></div>
+                <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr .8fr .8fr auto;gap:8px;margin-top:14px" id="char-form">
+                    <input class="input" id="c-name" placeholder="角色名">
+                    <select class="select" id="c-element">
+                        <option value="">元素</option>
+                        <option>火</option><option>水</option><option>风</option><option>雷</option>
+                        <option>草</option><option>冰</option><option>岩</option>
+                    </select>
+                    <input class="input" id="c-weapon" placeholder="武器">
+                    <input class="input" id="c-level" placeholder="等级" value="90">
+                    <input class="input" id="c-const" placeholder="命座" value="0">
+                    <button class="btn" id="btn-add-char">添加</button>
+                </div>
+            </div>
+        </div>
+        <div>
+            <div class="card">
+                <div class="card-title">绑定游戏 UID</div>
+                <div class="field">
+                    <label>游戏 UID <span class="hint">9 位数字</span></label>
+                    <input class="input" id="gameUid" placeholder="例如 100000001" maxlength="9">
+                </div>
+                <div class="field">
+                    <label>服务器</label>
+                    <select class="select" id="server">
+                        <option>天空岛</option>
+                        <option>世界树</option>
+                        <option>亚服</option>
+                        <option>美服</option>
+                        <option>欧服</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>游戏内昵称</label>
+                    <input class="input" id="nickname" placeholder="你在游戏里的昵称">
+                </div>
+                <div class="field">
+                    <label>冒险等阶</label>
+                    <input class="input" id="adventureRank" type="number" min="1" max="60" placeholder="1 - 60">
+                </div>
+                <div class="field">
+                    <label>世界等级</label>
+                    <input class="input" id="worldLevel" type="number" min="1" max="8" placeholder="1 - 8">
+                </div>
+                <button class="btn btn-block" id="btn-bind">保存并查看</button>
+                <button class="btn btn-line btn-block" id="btn-unbind" style="margin-top:10px">解除绑定</button>
+                <p class="hint" style="margin-top:12px">这里的所有数据都由你自己填写并保存在数据库中，系统不会生成任何模拟数据。</p>
+            </div>
+            <div class="card">
+                <div class="card-title">元素分布</div>
+                <div id="element-chart" class="chart"></div>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    PC.renderNav('game');
+
+    var loggedIn = !!PC.Store.token();
+    var hasAccount = false;
+
+    function stat(label, value) {
+        return '<div class="stat"><div class="num">' + (value === null || value === undefined || value === '' ? '-' : value) + '</div>' +
+            '<div class="lbl">' + label + '</div></div>';
+    }
+
+    function renderData(d) {
+        hasAccount = true;
+        document.getElementById('uid-hint').textContent = 'UID ' + d.gameUid;
+        document.getElementById('game-body').innerHTML =
+            '<div class="grid grid-3" style="gap:12px">' +
+            stat('冒险等阶', d.adventureRank) + stat('世界等级', d.worldLevel) +
+            stat('角色数量', (d.characters || []).length) + '</div>' +
+            '<div class="row" style="margin-top:10px"><div class="grow"><div class="name">' +
+            PC.escapeHtml(d.nickname || '未填写昵称') + '</div>' +
+            '<div class="sub">' + PC.escapeHtml(d.server || '') + ' · 绑定于 ' + PC.fmtTime(d.bindTime) + '</div></div></div>';
+
+        var stats = d.elementStats || {};
+        var data = Object.keys(stats).map(function (k) { return { label: k, value: stats[k] }; });
+        PC.barChart('element-chart', data, '#8f6cf7');
+    }
+
+    function renderCharacters(list) {
+        var host = document.getElementById('character-list');
+        document.getElementById('char-count').textContent = (list || []).length ? list.length + ' 个' : '';
+        if (!list || !list.length) {
+            host.innerHTML = PC.empty('还没有录入角色，在下面添加吧');
+            return;
+        }
+        host.innerHTML = list.map(function (c) {
+            return '<div class="row" data-id="' + c.id + '"><div class="grow"><div class="name">' + PC.escapeHtml(c.name) +
+                (c.element ? ' <span class="tag">' + PC.escapeHtml(c.element) + '</span>' : '') + '</div>' +
+                '<div class="sub">' + PC.escapeHtml(c.weapon || '未填武器') + ' · Lv.' + (c.level || '-') +
+                ' · ' + (c.constellation || 0) + ' 命</div></div>' +
+                '<a href="javascript:void(0)" class="del-char" style="font-size:13px;color:#e5484d">删除</a></div>';
+        }).join('');
+        host.querySelectorAll('.del-char').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var id = btn.parentNode.getAttribute('data-id');
+                PC.api.del('game/characters/' + id).then(function () {
+                    PC.toast('已删除');
+                    loadCharacters();
+                }).catch(function (e) { PC.toast(e.message); });
+            });
+        });
+    }
+
+    function loadCharacters() {
+        PC.api.get('game/characters').then(renderCharacters).catch(function () {});
+    }
+
+    function loadAccount() {
+        PC.api.get('game/account').then(function (acc) {
+            if (!acc) {
+                PC.api.get('game/data').then(renderData).catch(function () {});
+                return;
+            }
+            document.getElementById('gameUid').value = acc.gameUid || '';
+            document.getElementById('server').value = acc.server || '天空岛';
+            document.getElementById('nickname').value = acc.nickname || '';
+            document.getElementById('adventureRank').value = acc.adventureRank || '';
+            document.getElementById('worldLevel').value = acc.worldLevel || '';
+            PC.api.get('game/data').then(renderData).catch(function (e) { PC.toast(e.message); });
+        }).catch(function () {});
+    }
+
+    document.getElementById('btn-bind').addEventListener('click', function () {
+        var uid = document.getElementById('gameUid').value.trim();
+        if (!/^\d{9}$/.test(uid)) { PC.toast('请输入 9 位数字 UID'); return; }
+        var ar = parseInt(document.getElementById('adventureRank').value, 10);
+        var wl = parseInt(document.getElementById('worldLevel').value, 10);
+        PC.api.post('game/account', {
+            gameUid: uid,
+            server: document.getElementById('server').value,
+            gameName: '原神',
+            nickname: document.getElementById('nickname').value.trim(),
+            adventureRank: isNaN(ar) ? null : ar,
+            worldLevel: isNaN(wl) ? null : wl
+        }).then(function () {
+            PC.toast('已保存');
+            loadAccount();
+            loadCharacters();
+        }).catch(function (e) { PC.toast(e.message); });
+    });
+
+    document.getElementById('btn-add-char').addEventListener('click', function () {
+        var name = document.getElementById('c-name').value.trim();
+        if (!name) { PC.toast('请填写角色名'); return; }
+        var level = parseInt(document.getElementById('c-level').value, 10);
+        var constellation = parseInt(document.getElementById('c-const').value, 10);
+        PC.api.post('game/characters', {
+            name: name,
+            element: document.getElementById('c-element').value,
+            weapon: document.getElementById('c-weapon').value.trim(),
+            level: isNaN(level) ? null : level,
+            constellation: isNaN(constellation) ? null : constellation
+        }).then(function () {
+            PC.toast('已添加');
+            document.getElementById('c-name').value = '';
+            document.getElementById('c-weapon').value = '';
+            loadCharacters();
+            PC.api.get('game/data').then(renderData).catch(function () {});
+        }).catch(function (e) { PC.toast(e.message); });
+    });
+
+    document.getElementById('btn-unbind').addEventListener('click', function () {
+        if (!confirm('确认解除绑定？角色列表也会一起清空。')) { return; }
+        PC.api.del('game/account').then(function () {
+            PC.toast('已解除绑定');
+            location.reload();
+        }).catch(function (e) { PC.toast(e.message); });
+    });
+
+    if (!loggedIn) {
+        PC.guestHint('game-body', '登录后可以绑定游戏 UID、录入自己的角色数据');
+        PC.guestHint('character-list', '登录后可以录入角色');
+        document.getElementById('char-form').style.display = 'none';
+        document.getElementById('btn-bind').disabled = true;
+        document.getElementById('btn-unbind').disabled = true;
+        document.getElementById('element-chart').innerHTML = PC.empty('登录后查看');
+    } else {
+        loadAccount();
+        loadCharacters();
+    }
+</script>
+</body>
+</html>

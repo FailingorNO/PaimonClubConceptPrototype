@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>后台管理 · 派蒙社</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+<div class="container">
+    <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))" id="stats"></div>
+
+    <div class="card" style="margin-top:16px">
+        <div class="tabs" id="tabs">
+            <div class="tab active" data-tab="pending">待审核帖子</div>
+            <div class="tab" data-tab="posts">帖子管理</div>
+            <div class="tab" data-tab="reports">举报处理</div>
+            <div class="tab" data-tab="users">用户管理</div>
+            <div class="tab" data-tab="records">审核记录</div>
+            <div class="tab" data-tab="configs">系统配置</div>
+            <div class="tab" data-tab="products">商品维护</div>
+            <div class="tab" data-tab="orders">兑换订单</div>
+        </div>
+        <div id="tab-body"></div>
+    </div>
+</div>
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    PC.renderNav('admin');
+    if (!PC.requireLogin()) { throw new Error('need login'); }
+    if (!PC.isStaff()) { document.querySelector('.container').innerHTML = '<div class="card"><div class="empty">仅管理员与审核员可访问</div></div>'; throw new Error('forbidden'); }
+
+    var tab = 'pending';
+
+    function loadStats() {
+        PC.api.get('admin/stats').then(function (s) {
+            var items = [
+                ['用户总数', s.userCount], ['帖子总数', s.postCount], ['评论总数', s.commentCount],
+                ['今日新增用户', s.todayUsers], ['今日新增帖子', s.todayPosts],
+                ['待审核帖子', s.pendingPosts], ['待处理举报', s.pendingReports],
+                ['兑换订单', s.orderCount], ['累计发放积分', s.totalPointsGranted],
+                ['累计消耗积分', s.totalPointsConsumed]
+            ];
+            document.getElementById('stats').innerHTML = items.map(function (it) {
+                return '<div class="card" style="margin:0"><div class="stat"><div class="num">' + (it[1] || 0) +
+                    '</div><div class="lbl">' + it[0] + '</div></div></div>';
+            }).join('');
+        }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    function loadPending() {
+        PC.api.get('admin/audits/pending', { page: 1, size: 20 }).then(function (data) {
+            var host = document.getElementById('tab-body');
+            if (!data.items || !data.items.length) { host.innerHTML = PC.empty('没有待审核内容'); return; }
+            host.innerHTML = data.items.map(function (p) {
+                return '<div class="row" style="align-items:flex-start">' +
+                    '<div class="grow"><a class="name" href="post-detail.html?id=' + p.id + '" target="_blank">' +
+                    PC.escapeHtml(p.title) + '</a>' +
+                    '<div class="sub">' + PC.escapeHtml(p.authorName || '') + ' · ' + PC.fmtTime(p.createdAt) +
+                    ' · ' + PC.escapeHtml(p.categoryName || '') + '</div>' +
+                    '<div class="hint" style="margin-top:4px">' + PC.escapeHtml((p.summary || '').slice(0, 120)) + '</div></div>' +
+                    '<button class="btn btn-sm" data-ok="' + p.id + '">通过</button>' +
+                    '<button class="btn btn-sm btn-danger" data-no="' + p.id + '">驳回</button></div>';
+            }).join('');
+            host.querySelectorAll('[data-ok]').forEach(function (b) {
+                b.addEventListener('click', function () { audit(Number(b.getAttribute('data-ok')), 'APPROVED'); });
+            });
+            host.querySelectorAll('[data-no]').forEach(function (b) {
+                b.addEventListener('click', function () { audit(Number(b.getAttribute('data-no')), 'REJECTED'); });
+            });
+        }).catch(function (e) { document.getElementById('tab-body').innerHTML = PC.empty(e.message); });
+    }
+
+    function audit(postId, result) {
+        var reason = '';
+        if (result === 'REJECTED') {
+            reason = prompt('请输入驳回原因', '内容不符合社区规范');
+            if (reason === null) { return; }
+        }
+        PC.api.post('admin/audits', { targetType: 'POST', targetId: postId, result: result, reason: reason })
+            .then(function () {
+                PC.toast('操作成功');
+                loadPending();
+                loadStats();
+            }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    function loadPosts() {
+        PC.api.get('posts', { page: 1, size: 20 }).then(function (data) {
+            var host = document.getElementById('tab-body');
+            if (!data.items || !data.items.length) { host.innerHTML = PC.empty('还没有已发布的帖子'); return; }
+            host.innerHTML = '<div class="table-wrap"><table class="table">' +
+                '<tr><th>标题</th><th>作者</th><th>版块</th><th>浏览</th><th>状态</th><th>操作</th></tr>' +
+                data.items.map(function (p) {
+                    return '<tr><td><a href="post-detail.html?id=' + p.id + '" target="_blank">' +
+                        PC.escapeHtml(p.title) + '</a></td>' +
+                        '<td>' + PC.escapeHtml(p.authorName || '') + '</td>' +
+                        '<td>' + PC.escapeHtml(p.categoryName || '') + '</td>' +
+                        '<td>' + (p.viewCount || 0) + '</td>' +
+                        '<td>' + (p.top ? '<span class="tag">置顶</span>' : '正常') + '</td>' +
+                        '<td style="white-space:nowrap">' +
+                        '<button class="btn btn-sm" data-top="' + p.id + '" data-cur="' + (p.top ? 1 : 0) + '">' +
+                        (p.top ? '取消置顶' : '置顶') + '</button> ' +
+                        '<button class="btn btn-sm btn-danger" data-down="' + p.id + '">下架</button>' +
+                        '</td></tr>';
+                }).join('') + '</table></div>';
+            host.querySelectorAll('[data-top]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    var id = Number(b.getAttribute('data-top'));
+                    var next = b.getAttribute('data-cur') === '1' ? 'false' : 'true';
+                    PC.api.post('admin/posts/' + id + '/top', {}, { top: next }).then(function () {
+                        PC.toast(next === 'true' ? '已置顶' : '已取消置顶');
+                        loadPosts();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+            host.querySelectorAll('[data-down]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    var id = Number(b.getAttribute('data-down'));
+                    var reason = prompt('请输入下架原因', '不符合社区规范');
+                    if (reason === null) { return; }
+                    PC.api.post('admin/posts/' + id + '/takedown', { reason: reason }).then(function () {
+                        PC.toast('已下架');
+                        loadPosts();
+                        loadStats();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+        }).catch(function (e) { document.getElementById('tab-body').innerHTML = PC.empty(e.message); });
+    }
+
+    function loadReports() {
+        PC.api.get('admin/reports', { page: 1, size: 20 }).then(function (data) {
+            var host = document.getElementById('tab-body');
+            if (!data.items || !data.items.length) { host.innerHTML = PC.empty('暂无举报'); return; }
+            host.innerHTML = '<table class="table"><tr><th>类型</th><th>目标</th><th>原因</th><th>举报人</th><th>状态</th><th>操作</th></tr>' +
+                data.items.map(function (r) {
+                    return '<tr><td>' + PC.escapeHtml(r.targetType) + '</td>' +
+                        '<td>' + PC.escapeHtml(r.targetSummary || ('#' + r.targetId)) + '</td>' +
+                        '<td>' + PC.escapeHtml(r.reason) + '</td>' +
+                        '<td>' + PC.escapeHtml(r.reporterName || '') + '</td>' +
+                        '<td>' + PC.escapeHtml(PC.label('report', r.status)) + '</td>' +
+                        '<td>' + (r.status === 'PENDING'
+                            ? '<button class="btn btn-sm" data-handle="' + r.id + '" data-type="' + PC.escapeHtml(r.targetType) +
+                              '" data-target="' + (r.targetId || 0) + '">处理</button>' : '-') + '</td></tr>';
+                }).join('') + '</table>';
+            host.querySelectorAll('[data-handle]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    handleReport(Number(b.getAttribute('data-handle')),
+                        b.getAttribute('data-type') || 'POST',
+                        Number(b.getAttribute('data-target') || 0));
+                });
+            });
+        }).catch(function (e) { document.getElementById('tab-body').innerHTML = PC.empty(e.message); });
+    }
+
+    function handleReport(id, targetType, targetId) {
+        PC.modal('处理举报',
+            '<div class="field"><label>处理结果</label>' +
+            '<select class="select" id="h-status"><option value="HANDLED">确认违规，已处理</option>' +
+            '<option value="REJECTED">举报不成立</option></select></div>' +
+            '<div class="field"><label>说明</label><input class="input" id="h-result" placeholder="处理说明"></div>' +
+            '<div class="field"><label><input type="checkbox" id="h-takedown"> 同时下架被举报帖子</label></div>',
+            function (mask) {
+                var body = {
+                    targetType: targetType || 'POST',
+                    targetId: targetId || 0,
+                    result: mask.querySelector('#h-status').value,
+                    reason: mask.querySelector('#h-result').value.trim(),
+                    takeDown: mask.querySelector('#h-takedown').checked
+                };
+                PC.api.post('admin/reports/' + id + '/handle', body).then(function () {
+                    PC.toast('已处理');
+                    loadReports();
+                    loadStats();
+                }).catch(function (e) { PC.toast(e.message); });
+            }, '提交');
+    }
+
+    var USERS = {};
+    var CATEGORIES = [];
+
+    function loadUsers() {
+        /* 板块字典用于版主授权选择，一次加载即可 */
+        if (!CATEGORIES.length) {
+            PC.api.get('posts/categories').then(function (list) { CATEGORIES = list || []; }).catch(function () {});
+        }
+        PC.api.get('admin/users', { page: 1, size: 20 }).then(function (data) {
+            var host = document.getElementById('tab-body');
+            if (!data.items || !data.items.length) { host.innerHTML = PC.empty('暂无用户'); return; }
+            USERS = {};
+            (data.items || []).forEach(function (u) { USERS[u.id] = u; });
+            host.innerHTML = '<div style="display:flex;gap:8px;margin-bottom:10px">' +
+                '<input class="input" id="u-kw" placeholder="搜索用户名/昵称" style="max-width:220px">' +
+                '<button class="btn btn-sm" id="u-search">搜索</button></div>' +
+                '<table class="table"><tr><th>ID</th><th>用户名</th><th>昵称</th><th>角色</th><th>负责板块</th><th>积分</th><th>状态</th><th>操作</th></tr>' +
+                data.items.map(function (u) {
+                    return '<tr><td>' + u.id + '</td><td>' + PC.escapeHtml(u.username) + '</td>' +
+                        '<td>' + PC.escapeHtml(u.nickname || '') + '</td><td>' + PC.escapeHtml(PC.label('role', u.role)) + '</td>' +
+                        '<td>' + PC.escapeHtml(categoryNames(u.moderatedCategories)) + '</td>' +
+                        '<td>' + (u.points || 0) + '</td>' +
+                        '<td>' + (u.status === 1 ? '<span class="tag tag-ok">正常</span>' : '<span class="tag tag-danger">禁用</span>') + '</td>' +
+                        '<td><button class="btn btn-sm btn-line" data-user="' + u.id + '">管理</button></td></tr>';
+                }).join('') + '</table>';
+            document.getElementById('u-search').addEventListener('click', function () {
+                var kw = document.getElementById('u-kw').value.trim();
+                PC.api.get('admin/users', { keyword: kw, page: 1, size: 20 }).then(function (res) {
+                    var host2 = document.getElementById('tab-body');
+                    USERS = {};
+                    (res.items || []).forEach(function (u) { USERS[u.id] = u; });
+                    host2.innerHTML = '<table class="table"><tr><th>ID</th><th>用户名</th><th>昵称</th><th>角色</th><th>负责板块</th><th>积分</th><th>状态</th><th>操作</th></tr>' +
+                        (res.items || []).map(function (u) {
+                            return '<tr><td>' + u.id + '</td><td>' + PC.escapeHtml(u.username) + '</td>' +
+                                '<td>' + PC.escapeHtml(u.nickname || '') + '</td><td>' + PC.escapeHtml(PC.label('role', u.role)) + '</td>' +
+                                '<td>' + PC.escapeHtml(categoryNames(u.moderatedCategories)) + '</td>' +
+                                '<td>' + (u.points || 0) + '</td><td>' + PC.escapeHtml(PC.label('userStatus', u.status)) + '</td>' +
+                                '<td><button class="btn btn-sm btn-line" data-user="' + u.id + '">管理</button></td></tr>';
+                        }).join('') + '</table>';
+                    host2.querySelectorAll('[data-user]').forEach(function (b) {
+                        b.addEventListener('click', function () { manageUser(Number(b.getAttribute('data-user'))); });
+                    });
+                }).catch(function (e) { PC.toast(e.message); });
+            });
+            host.querySelectorAll('[data-user]').forEach(function (b) {
+                b.addEventListener('click', function () { manageUser(Number(b.getAttribute('data-user'))); });
+            });
+        }).catch(function (e) { document.getElementById('tab-body').innerHTML = PC.empty(e.message); });
+    }
+
+    function categoryNames(raw) {
+        if (!raw) { return '—'; }
+        var ids = String(raw).split(',');
+        var names = ids.map(function (id) {
+            var hit = CATEGORIES.filter(function (c) { return String(c.id) === String(id).trim(); })[0];
+            return hit ? hit.name : ('#' + id);
+        });
+        return names.join('、') || '—';
+    }
+
+    function manageUser(userId) {
+        var src = USERS[userId] || {};
+        var current = String(src.moderatedCategories || '');
+        var selected = current.split(',').map(function (x) { return x.trim(); });
+        var boxes = CATEGORIES.map(function (c) {
+            var on = selected.indexOf(String(c.id)) >= 0;
+            return '<label style="display:inline-flex;align-items:center;gap:4px;margin:0 12px 6px 0">' +
+                '<input type="checkbox" class="m-cat" value="' + c.id + '"' + (on ? ' checked' : '') + '>' +
+                PC.escapeHtml(c.name) + '</label>';
+        }).join('') || '<span class="hint">板块字典为空</span>';
+
+        PC.modal('管理用户 #' + userId + '（' + PC.escapeHtml(src.username || '') + '）',
+            '<div class="field"><label>角色</label><select class="select" id="m-role">' +
+            '<option value="">不修改</option>' +
+            '<option value="USER"' + (src.role === 'USER' ? ' selected' : '') + '>USER</option>' +
+            '<option value="MODERATOR"' + (src.role === 'MODERATOR' ? ' selected' : '') + '>MODERATOR</option>' +
+            '<option value="ADMIN"' + (src.role === 'ADMIN' ? ' selected' : '') + '>ADMIN</option></select></div>' +
+            '<div class="field"><label>负责板块 <span class="hint">仅 MODERATOR 生效，留空表示不限制</span></label>' +
+            '<div style="margin-top:6px">' + boxes + '</div></div>' +
+            '<div class="field"><label>状态</label><select class="select" id="m-status">' +
+            '<option value="">不修改</option><option value="1">正常</option><option value="0">禁用</option></select></div>' +
+            '<div class="field"><label>积分调整 <span class="hint">正数增加，负数扣减</span></label>' +
+            '<input class="input" id="m-points" type="number" placeholder="0"></div>' +
+            '<div class="field"><label>说明</label><input class="input" id="m-reason" placeholder="操作说明"></div>',
+            function (mask) {
+                var role = mask.querySelector('#m-role').value;
+                var status = mask.querySelector('#m-status').value;
+                var points = mask.querySelector('#m-points').value;
+                var cats = [];
+                mask.querySelectorAll('.m-cat').forEach(function (c) {
+                    if (c.checked) { cats.push(c.value); }
+                });
+                var body = {
+                    role: role || null,
+                    status: status === '' ? null : Number(status),
+                    pointsDelta: points === '' ? null : Number(points),
+                    moderatedCategories: cats.join(','),
+                    reason: mask.querySelector('#m-reason').value.trim()
+                };
+                PC.api.put('admin/users/' + userId, body).then(function () {
+                    PC.toast('已更新');
+                    loadUsers();
+                }).catch(function (e) { PC.toast(e.message); });
+            }, '保存');
+    }
+
+    function loadRecords() {
+        PC.api.get('admin/audits/records', { page: 1, size: 20 }).then(function (data) {
+            var host = document.getElementById('tab-body');
+            if (!data.items || !data.items.length) { host.innerHTML = PC.empty('暂无审核记录'); return; }
+            host.innerHTML = '<table class="table"><tr><th>时间</th><th>类型</th><th>目标</th><th>结果</th><th>原因</th><th>审核人</th></tr>' +
+                data.items.map(function (a) {
+                    return '<tr><td>' + PC.fmtTime(a.createdAt) + '</td><td>' + PC.escapeHtml(a.targetType === 'POST' ? '帖子' : (a.targetType === 'COMMENT' ? '评论' : a.targetType)) + '</td>' +
+                        '<td>' + PC.escapeHtml(a.targetTitle || ('#' + a.targetId)) + '</td>' +
+                        '<td>' + PC.escapeHtml(PC.label('audit', a.result)) + '</td><td>' + PC.escapeHtml(a.reason || '') + '</td>' +
+                        '<td>' + PC.escapeHtml(a.auditorName || '') + '</td></tr>';
+                }).join('') + '</table>';
+        }).catch(function (e) { document.getElementById('tab-body').innerHTML = PC.empty(e.message); });
+    }
+
+    function loadConfigs() {
+        PC.api.get('admin/configs').then(function (list) {
+            var host = document.getElementById('tab-body');
+            host.innerHTML = '<table class="table"><tr><th>配置键</th><th>值</th><th>说明</th><th>操作</th></tr>' +
+                (list || []).map(function (c) {
+                    return '<tr><td>' + PC.escapeHtml(c.key) + '</td><td>' + PC.escapeHtml(c.value) + '</td>' +
+                        '<td>' + PC.escapeHtml(c.description || '') + '</td>' +
+                        '<td><button class="btn btn-sm btn-line" data-cfg="' + PC.escapeHtml(c.key) + '" data-val="' + PC.escapeHtml(c.value) + '">修改</button></td></tr>';
+                }).join('') + '</table>' +
+                '<div style="margin-top:14px;display:flex;gap:8px"><input class="input" id="word" placeholder="新增敏感词" style="max-width:220px">' +
+                '<button class="btn btn-sm" id="btn-word">添加敏感词</button></div>';
+            host.querySelectorAll('[data-cfg]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    var key = b.getAttribute('data-cfg');
+                    var val = b.getAttribute('data-val');
+                    PC.modal('修改配置 ' + key, '<div class="field"><label>值</label><input class="input" id="cfg-val" value="' +
+                        PC.escapeHtml(val) + '"></div>', function (mask) {
+                        PC.api.put('admin/configs', { key: key, value: mask.querySelector('#cfg-val').value.trim() })
+                            .then(function () { PC.toast('已保存'); loadConfigs(); })
+                            .catch(function (e) { PC.toast(e.message); });
+                    }, '保存');
+                });
+            });
+            document.getElementById('btn-word').addEventListener('click', function () {
+                var word = document.getElementById('word').value.trim();
+                if (!word) { PC.toast('请输入敏感词'); return; }
+                PC.api.post('admin/sensitive-words', { word: word }).then(function () {
+                    PC.toast('已添加');
+                    document.getElementById('word').value = '';
+                }).catch(function (e) { PC.toast(e.message); });
+            });
+        }).catch(function (e) { document.getElementById('tab-body').innerHTML = PC.empty(e.message); });
+    }
+
+    var PRODUCTS = {};
+
+    function loadProducts() {
+        PC.api.get('mall/products', { page: 1, size: 50 }).then(function (data) {
+            var host = document.getElementById('tab-body');
+            PRODUCTS = {};
+            (data.items || []).forEach(function (p) { PRODUCTS[p.id] = p; });
+            host.innerHTML = '<div style="margin-bottom:10px"><button class="btn btn-sm" id="btn-new-product">新增商品</button></div>' +
+                '<table class="table"><tr><th>ID</th><th>名称</th><th>类型</th><th>积分</th><th>库存</th><th>状态</th><th>操作</th></tr>' +
+                (data.items || []).map(function (p) {
+                    return '<tr><td>' + p.id + '</td><td>' + PC.escapeHtml(p.name) + '</td><td>' + PC.escapeHtml(PC.label('productType', p.type)) + '</td>' +
+                        '<td>' + p.pricePoints + '</td><td>' + p.stock + '</td><td>' + PC.escapeHtml(PC.label('onOff', p.status)) + '</td>' +
+                        '<td><button class="btn btn-sm btn-line" data-edit="' + p.id + '">编辑</button>' +
+                        '<button class="btn btn-sm btn-danger" data-del="' + p.id + '" style="margin-left:6px">删除</button></td></tr>';
+                }).join('') + '</table>';
+            document.getElementById('btn-new-product').addEventListener('click', function () { editProduct(null); });
+            host.querySelectorAll('[data-edit]').forEach(function (b) {
+                b.addEventListener('click', function () { editProduct(Number(b.getAttribute('data-edit'))); });
+            });
+            host.querySelectorAll('[data-del]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    if (!confirm('确认删除该商品？')) { return; }
+                    PC.api.del('mall/products/' + b.getAttribute('data-del')).then(function () {
+                        PC.toast('已删除');
+                        loadProducts();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+        }).catch(function (e) { document.getElementById('tab-body').innerHTML = PC.empty(e.message); });
+    }
+
+    function editProduct(id) {
+        var src = id ? (PRODUCTS[id] || {}) : {};
+        PC.modal(id ? '编辑商品 #' + id : '新增商品',
+            '<div class="field"><label>名称</label><input class="input" id="p-name" value="' + PC.escapeHtml(src.name || '') + '"></div>' +
+            '<div class="field"><label>描述</label><input class="input" id="p-desc" value="' + PC.escapeHtml(src.description || '') + '"></div>' +
+            '<div class="field"><label>类型</label><select class="select" id="p-type">' +
+            '<option value="PHYSICAL"' + (src.type === 'PHYSICAL' ? ' selected' : '') + '>实物</option>' +
+            '<option value="VIRTUAL"' + (src.type === 'VIRTUAL' ? ' selected' : '') + '>虚拟</option></select></div>' +
+            '<div class="field"><label>所需积分</label><input class="input" id="p-price" type="number" value="' + (src.pricePoints || 100) + '"></div>' +
+            '<div class="field"><label>库存</label><input class="input" id="p-stock" type="number" value="' + (src.stock === undefined ? 10 : src.stock) + '"></div>' +
+            '<div class="field"><label>状态</label><select class="select" id="p-status">' +
+            '<option value="1"' + (src.status === 1 ? ' selected' : '') + '>上架</option>' +
+            '<option value="0"' + (src.status === 0 ? ' selected' : '') + '>下架</option></select></div>',
+            function (mask) {
+                var body = {
+                    id: id,
+                    name: mask.querySelector('#p-name').value.trim(),
+                    description: mask.querySelector('#p-desc').value.trim(),
+                    type: mask.querySelector('#p-type').value,
+                    pricePoints: Number(mask.querySelector('#p-price').value || 0),
+                    stock: Number(mask.querySelector('#p-stock').value || 0),
+                    status: Number(mask.querySelector('#p-status').value || 1)
+                };
+                if (!body.name) { PC.toast('请填写商品名称'); return false; }
+                PC.api.post('mall/products', body).then(function () {
+                    PC.toast('已保存');
+                    loadProducts();
+                }).catch(function (e) { PC.toast(e.message); });
+            }, '保存');
+    }
+
+    var ORDER_STATUS = {
+        CREATED: '待发货', PENDING: '待发货', PAID: '已支付', SHIPPED: '已发货',
+        COMPLETED: '已完成', DONE: '已完成', CANCELED: '已取消', REJECTED: '已驳回'
+    };
+
+    function loadOrders() {
+        PC.api.get('mall/orders', { page: 1, size: 20 }).then(function (data) {
+            var host = document.getElementById('tab-body');
+            if (!data.items || !data.items.length) { host.innerHTML = PC.empty('暂无兑换订单'); return; }
+            host.innerHTML = '<table class="table"><tr><th>ID</th><th>商品</th><th>类型</th><th>积分</th>' +
+                '<th>收货信息</th><th>状态</th><th>物流</th><th>时间</th><th>操作</th></tr>' +
+                data.items.map(function (o) {
+                    var receiver = o.receiverName
+                        ? PC.escapeHtml(o.receiverName) + ' ' + PC.escapeHtml(o.receiverPhone || '') +
+                          '<div class="sub">' + PC.escapeHtml(o.receiverAddress || '') + '</div>'
+                        : '<span class="hint">—</span>';
+                    var actions = '';
+                    if (o.status === 'CREATED' || o.status === 'PENDING') {
+                        actions = '<button class="btn btn-sm" data-ship="' + o.id + '">发货</button> ' +
+                            '<button class="btn btn-sm btn-danger" data-ocancel="' + o.id + '">取消</button>';
+                    } else if (o.status === 'SHIPPED') {
+                        actions = '<button class="btn btn-sm btn-line" data-ofinish="' + o.id + '">标记完成</button>';
+                    } else {
+                        actions = '-';
+                    }
+                    return '<tr><td>' + o.id + '</td>' +
+                        '<td>' + PC.escapeHtml(o.productName || '') + '</td>' +
+                        '<td>' + PC.escapeHtml(o.productType === 'VIRTUAL' ? '虚拟' : '实物') + '</td>' +
+                        '<td>' + (o.pointsCost || 0) + '</td>' +
+                        '<td>' + receiver + '</td>' +
+                        '<td>' + PC.escapeHtml(ORDER_STATUS[o.status] || o.status) + '</td>' +
+                        '<td>' + PC.escapeHtml(o.logisticsNo || '—') + '</td>' +
+                        '<td>' + PC.fmtTime(o.createdAt) + '</td>' +
+                        '<td style="white-space:nowrap">' + actions + '</td></tr>';
+                }).join('') + '</table>';
+            host.querySelectorAll('[data-ship]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    var id = b.getAttribute('data-ship');
+                    var no = prompt('请输入物流单号', '');
+                    if (no === null) { return; }
+                    if (!no.trim()) { PC.toast('物流单号不能为空'); return; }
+                    PC.api.post('mall/orders/' + id + '/ship', { logisticsNo: no.trim() }).then(function () {
+                        PC.toast('已发货');
+                        loadOrders();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+            host.querySelectorAll('[data-ofinish]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    PC.api.post('mall/orders/' + b.getAttribute('data-ofinish') + '/finish').then(function () {
+                        PC.toast('已完成');
+                        loadOrders();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+            host.querySelectorAll('[data-ocancel]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    if (!confirm('取消后会把积分退回用户并恢复库存，确认取消该订单？')) { return; }
+                    PC.api.post('mall/orders/' + b.getAttribute('data-ocancel') + '/cancel').then(function () {
+                        PC.toast('已取消并退款');
+                        loadOrders();
+                        loadStats();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+        }).catch(function (e) { document.getElementById('tab-body').innerHTML = PC.empty(e.message); });
+    }
+
+    var loaders = {
+        pending: loadPending, posts: loadPosts, reports: loadReports, users: loadUsers,
+        records: loadRecords, configs: loadConfigs, products: loadProducts, orders: loadOrders
+    };
+
+    document.querySelectorAll('#tabs .tab').forEach(function (t) {
+        t.addEventListener('click', function () {
+            document.querySelectorAll('#tabs .tab').forEach(function (x) { x.classList.remove('active'); });
+            t.classList.add('active');
+            tab = t.getAttribute('data-tab');
+            loaders[tab]();
+        });
+    });
+
+    loadStats();
+    loadPending();
+</script>
+</body>
+</html>

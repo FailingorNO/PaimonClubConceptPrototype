@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>发布帖子 · 派蒙社</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+<div class="container" style="max-width:760px">
+    <div class="card">
+        <div class="card-title">发布新帖 <small id="mode-hint"></small></div>
+        <div class="field">
+            <label>标题</label>
+            <input class="input" id="title" maxlength="200" placeholder="一句话说清你的主题">
+        </div>
+        <div class="field">
+            <label>分类</label>
+            <select class="select" id="categoryId"></select>
+        </div>
+        <div class="field">
+            <label>正文</label>
+            <textarea class="textarea" id="content" placeholder="支持换行，禁止发布违规内容"></textarea>
+        </div>
+        <div class="field">
+            <label>标签 <span class="hint">多个标签用英文逗号分隔，最多 5 个</span></label>
+            <input class="input" id="tags" placeholder="抽卡,深渊,攻略">
+        </div>
+        <div class="field">
+            <label>配图 <span class="hint">支持多张，单张不超过 5MB</span></label>
+            <input type="file" id="images" accept="image/*" multiple>
+            <div id="image-preview" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"></div>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+            <a class="btn btn-line" href="index.html">取消</a>
+            <button class="btn" id="btn-submit">发布</button>
+        </div>
+    </div>
+</div>
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    PC.renderNav('index');
+    if (!PC.requireLogin()) { throw new Error('need login'); }
+    var editId = PC.param('id');
+    var imageUrls = [];
+
+    PC.api.get('posts/categories').then(function (list) {
+        document.getElementById('categoryId').innerHTML = (list || []).map(function (c) {
+            return '<option value="' + c.id + '">' + PC.escapeHtml(c.name) + '</option>';
+        }).join('');
+    });
+
+    /* 统一的图片预览插入：上传成功和编辑回填都走这里 */
+    function appendPreview(url) {
+        var img = document.createElement('img');
+        img.src = PC.asset(url);
+        img.setAttribute('data-url', url);
+        img.style.cssText = 'width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid #e6eaf2;cursor:pointer';
+        img.title = '点击移除';
+        img.addEventListener('click', function () {
+            var i = imageUrls.indexOf(url);
+            if (i >= 0) { imageUrls.splice(i, 1); }
+            img.remove();
+        });
+        document.getElementById('image-preview').appendChild(img);
+    }
+
+    if (editId) {
+        PC.api.get('posts/' + editId).then(function (p) {
+            document.getElementById('title').value = p.title;
+            document.getElementById('content').value = p.content;
+            document.getElementById('tags').value = p.tags || '';
+            document.getElementById('mode-hint').textContent = '编辑模式';
+            if (p.categoryId) { document.getElementById('categoryId').value = p.categoryId; }
+            /* 回填原有配图，否则编辑一次就会把图片全部丢掉 */
+            imageUrls = (p.images || []).slice();
+            imageUrls.forEach(appendPreview);
+        }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    document.getElementById('images').addEventListener('change', function (e) {
+        var files = Array.prototype.slice.call(e.target.files || []);
+        files.forEach(function (file) {
+            var reader = new FileReader();
+            reader.onload = function () {
+                PC.api.post('files/upload', { dataUrl: reader.result }).then(function (res) {
+                    imageUrls.push(res.url);
+                    appendPreview(res.url);
+                }).catch(function (err) { PC.toast(err.message); });
+            };
+            reader.readAsDataURL(file);
+        });
+        e.target.value = '';
+    });
+
+    document.getElementById('btn-submit').addEventListener('click', function () {
+        var title = document.getElementById('title').value.trim();
+        var content = document.getElementById('content').value.trim();
+        var categoryId = document.getElementById('categoryId').value;
+        var tags = document.getElementById('tags').value.trim();
+        if (title.length < 2) { PC.toast('标题太短'); return; }
+        if (content.length < 5) { PC.toast('正文太短'); return; }
+        if (!categoryId) { PC.toast('请选择分类'); return; }
+        var body = {
+            title: title, content: content, categoryId: Number(categoryId),
+            tags: tags, images: imageUrls
+        };
+        var btn = this;
+        btn.disabled = true;
+        var promise = editId ? PC.api.put('posts/' + editId, body) : PC.api.post('posts', body);
+        promise.then(function (p) {
+            PC.toast(p.status === 'PENDING' ? '已提交，等待审核' : '发布成功');
+            setTimeout(function () { location.href = 'post-detail.html?id=' + p.id; }, 700);
+        }).catch(function (e) {
+            PC.toast(e.message);
+            btn.disabled = false;
+        });
+    });
+</script>
+</body>
+</html>

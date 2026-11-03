@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>帖子详情 · 派蒙社</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+<div class="container">
+    <div class="grid grid-2">
+        <div>
+            <div class="card" id="post-card"><div class="empty">加载中...</div></div>
+            <div class="card">
+                <div class="card-title">评论 <small id="comment-count"></small></div>
+                <div class="field">
+                    <textarea class="textarea" id="comment-content" placeholder="友善发言，共建社区氛围" style="min-height:90px"></textarea>
+                    <div style="display:flex;justify-content:flex-end;margin-top:10px">
+                        <button class="btn" id="btn-comment">发表评论</button>
+                    </div>
+                </div>
+                <div id="comment-list"></div>
+            </div>
+        </div>
+        <div>
+            <div class="card">
+                <div class="card-title">作者</div>
+                <div id="author-box"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">相关推荐</div>
+                <div id="related-list"></div>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    PC.renderNav('index');
+    var postId = PC.param('id') || PC.param('postId');
+    var shareCode = PC.param('share');
+    var current = null;
+
+    function renderPost(p) {
+        current = p;
+        document.getElementById('post-card').innerHTML =
+            '<div class="post-head">' +
+            '<img class="avatar-sm" src="' + PC.avatar(p.authorAvatar) + '" alt="">' +
+            '<div class="grow"><div class="name"><a href="user-center.html?id=' + p.userId + '">' + PC.escapeHtml(p.authorName || '') + '</a></div>' +
+            '<div class="sub">' + PC.fmtTime(p.createdAt) + ' · ' + PC.escapeHtml(p.categoryName || '') + '</div></div>' +
+            (p.top ? '<span class="tag tag-ok">置顶</span>' : '') +
+            (p.status !== 'PUBLISHED' ? '<span class="tag tag-warn">' + (p.status === 'PENDING' ? '待审核' : '未通过') + '</span>' : '') +
+            '</div>' +
+            '<h1 style="font-size:22px;margin:6px 0 12px">' + PC.escapeHtml(p.title) + '</h1>' +
+            '<div style="white-space:pre-wrap;line-height:1.9">' + PC.escapeHtml(p.content) + '</div>' +
+            (p.tags ? '<div style="margin-top:14px">' + p.tags.split(',').filter(Boolean).map(function (t) {
+                return '<span class="tag">#' + PC.escapeHtml(t.trim()) + '</span>';
+            }).join('') + '</div>' : '') +
+            '<div class="post-meta" style="margin-top:18px">' +
+            '<span>👁 ' + (p.viewCount || 0) + '</span><span>💬 ' + (p.commentCount || 0) + '</span>' +
+            '<span>⭐ ' + (p.favoriteCount || 0) + '</span></div>' +
+            '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">' +
+            '<button class="btn ' + (p.liked ? '' : 'btn-line') + '" id="btn-like">👍 点赞 ' + (p.likeCount || 0) + '</button>' +
+            '<button class="btn ' + (p.favorited ? '' : 'btn-line') + '" id="btn-fav">⭐ 收藏</button>' +
+            '<button class="btn btn-line" id="btn-share">🔗 分享</button>' +
+            '<button class="btn btn-line" id="btn-report">🚩 举报</button>' +
+            (p.userId && PC.Store.user() && p.userId === PC.Store.user().id ?
+                '<button class="btn btn-danger" id="btn-delete">删除</button>' : '') +
+            '</div>';
+
+        document.getElementById('author-box').innerHTML =
+            '<div class="row"><img class="avatar-sm" src="' + PC.avatar(p.authorAvatar) + '" alt="">' +
+            '<div class="grow"><a class="name" href="user-center.html?id=' + p.userId + '">' + PC.escapeHtml(p.authorName || '') + '</a>' +
+            '<div class="sub">' + PC.escapeHtml(p.categoryName || '') + '</div></div></div>';
+
+        document.getElementById('btn-like').addEventListener('click', function () { toggle('posts/' + p.id + 'like', '点赞'); });
+        document.getElementById('btn-fav').addEventListener('click', function () { toggle('posts/' + p.id + 'favorite', '收藏'); });
+        document.getElementById('btn-share').addEventListener('click', doShare);
+        document.getElementById('btn-report').addEventListener('click', function () { doReport('POST', p.id); });
+        var del = document.getElementById('btn-delete');
+        if (del) {
+            del.addEventListener('click', function () {
+                if (!confirm('确认删除这篇帖子？')) { return; }
+                PC.api.del('posts/' + p.id).then(function () {
+                    PC.toast('已删除');
+                    setTimeout(function () { location.href = 'index.html'; }, 600);
+                }).catch(function (e) { PC.toast(e.message); });
+            });
+        }
+    }
+
+    function toggle(path, label) {
+        if (!PC.Store.token()) { PC.toast('请先登录'); return; }
+        PC.api.post(path).then(function (on) {
+            PC.toast(on ? label + '成功' : '已取消' + label);
+            loadPost();
+        }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    function doShare() {
+        PC.api.post('posts/' + current.id + '/share').then(function (s) {
+            var url = s.url || (location.origin + 'post-detail.html?share=' + s.shareCode);
+            PC.modal('分享帖子', '<div class="field"><label>分享链接</label>' +
+                '<input class="input" id="share-url" value="' + PC.escapeHtml(url) + '" readonly></div>' +
+                '<div style="text-align:center;margin-top:10px"><img src="api/posts/share/' + s.shareCode +
+                '/qrcode" alt="二维码" style="width:180px;height:180px;border:1px solid #e6eaf2;border-radius:10px"></div>',
+                function (mask) {
+                    var input = mask.querySelector('#share-url');
+                    input.select();
+                    try { document.execCommand('copy'); PC.toast('链接已复制'); } catch (e) {}
+                }, '复制链接');
+        }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    function doReport(type, id) {
+        if (!PC.Store.token()) { PC.toast('请先登录'); return; }
+        PC.modal('举报内容', '<div class="field"><label>举报原因</label>' +
+            '<textarea class="textarea" id="report-reason" placeholder="请描述违规情况" style="min-height:90px"></textarea></div>',
+            function (mask) {
+                var reason = mask.querySelector('#report-reason').value.trim();
+                if (!reason) { PC.toast('请填写举报原因'); return false; }
+                PC.api.post('/' + (type === 'POST' ? 'posts' : 'comments') + '/' + id + '/report', { reason: reason })
+                    .then(function () { PC.toast('举报已提交，等待处理'); })
+                    .catch(function (e) { PC.toast(e.message); });
+            }, '提交举报');
+    }
+
+    function renderComments(list) {
+        var host = document.getElementById('comment-list');
+        if (!list || !list.length) { host.innerHTML = PC.empty('还没有评论'); return; }
+        function item(c, depth) {
+            var html = '<div style="margin-left:' + (depth * 22) + 'px;padding:10px 0;border-bottom:1px dashed #e6eaf2">' +
+                '<div class="row" style="border:none;padding:0">' +
+                '<img class="avatar-sm" src="' + PC.avatar(c.userAvatar) + '" alt="">' +
+                '<div class="grow"><div class="name">' + PC.escapeHtml(c.userName || '') + '</div>' +
+                '<div class="sub">' + PC.fmtTime(c.createdAt) + '</div></div></div>' +
+                '<div style="margin:8px 0 6px">' + PC.escapeHtml(c.content) + '</div>' +
+                '<div style="display:flex;gap:14px;font-size:12.5px;color:#7c8798">' +
+                '<a href="javascript:void(0)" data-like="' + c.id + '">👍 ' + (c.likeCount || 0) + '</a>' +
+                '<a href="javascript:void(0)" data-reply="' + c.id + '">回复</a>' +
+                '<a href="javascript:void(0)" data-report="' + c.id + '">举报</a>' +
+                ((PC.Store.user() || {}).id && c.userId &&
+                 Number(c.userId) === Number((PC.Store.user() || {}).id)
+                    ? '<a href="javascript:void(0)" data-del="' + c.id + '">删除</a>' : '') + '</div>';
+            if (c.children && c.children.length) {
+                c.children.forEach(function (child) { html += item(child, depth + 1); });
+            }
+            html += '</div>';
+            return html;
+        }
+        host.innerHTML = list.map(function (c) { return item(c, 0); }).join('');
+        host.querySelectorAll('[data-like]').forEach(function (a) {
+            a.addEventListener('click', function () {
+                PC.api.post('comments/' + a.getAttribute('data-like') + '/like')
+                    .then(function () { loadComments(); })
+                    .catch(function (e) { PC.toast(e.message); });
+            });
+        });
+        host.querySelectorAll('[data-reply]').forEach(function (a) {
+            a.addEventListener('click', function () {
+                var id = a.getAttribute('data-reply');
+                PC.modal('回复评论', '<div class="field"><label>回复内容</label>' +
+                    '<textarea class="textarea" id="reply-content" style="min-height:90px"></textarea></div>',
+                    function (mask) {
+                        var content = mask.querySelector('#reply-content').value.trim();
+                        if (!content) { PC.toast('请输入回复内容'); return false; }
+                        PC.api.post('comments', { postId: Number(postId), parentId: Number(id), content: content })
+                            .then(function () { PC.toast('回复成功'); loadComments(); })
+                            .catch(function (e) { PC.toast(e.message); });
+                    }, '回复');
+            });
+        });
+        host.querySelectorAll('[data-del]').forEach(function (a) {
+            a.addEventListener('click', function () {
+                if (!confirm('确定删除这条评论？')) { return; }
+                PC.api.del('comments/' + a.getAttribute('data-del')).then(function () {
+                    PC.toast('已删除');
+                    loadComments();
+                }).catch(function (e) { PC.toast(e.message); });
+            });
+        });
+        host.querySelectorAll('[data-report]').forEach(function (a) {
+            a.addEventListener('click', function () { doReport('COMMENT', a.getAttribute('data-report')); });
+        });
+    }
+
+    function loadPost() {
+        var promise = shareCode ? PC.api.get('posts/share/' + shareCode) : PC.api.get('posts/' + postId);
+        promise.then(function (p) {
+            postId = p.id;
+            renderPost(p);
+            document.getElementById('comment-count').textContent = '共 ' + (p.commentCount || 0) + ' 条';
+            loadComments();
+            loadRelated();
+        }).catch(function (e) {
+            document.getElementById('post-card').innerHTML = PC.empty(e.message);
+        });
+    }
+
+    function loadComments() {
+        if (!postId) { return; }
+        PC.api.get('posts/' + postId + '/comments').then(renderComments).catch(function () {});
+    }
+
+    function loadRelated() {
+        PC.api.get('posts/' + postId + '/related', { limit: 4 }).then(function (list) {
+            var host = document.getElementById('related-list');
+            if (!list || !list.length) { host.innerHTML = PC.empty('暂无推荐'); return; }
+            host.innerHTML = list.map(function (p) {
+                return '<div class="row"><div class="grow"><a class="name" href="post-detail.html?id=' + p.id + '">' +
+                    PC.escapeHtml(p.title) + '</a><div class="sub">👍 ' + (p.likeCount || 0) + '</div></div></div>';
+            }).join('');
+        }).catch(function () {});
+    }
+
+    document.getElementById('btn-comment').addEventListener('click', function () {
+        if (!PC.Store.token()) { PC.toast('请先登录'); return; }
+        var content = document.getElementById('comment-content').value.trim();
+        if (!content) { PC.toast('请输入评论内容'); return; }
+        PC.api.post('comments', { postId: Number(postId), content: content }).then(function () {
+            document.getElementById('comment-content').value = '';
+            PC.toast('评论成功');
+            loadPost();
+        }).catch(function (e) { PC.toast(e.message); });
+    });
+
+    loadPost();
+</script>
+</body>
+</html>

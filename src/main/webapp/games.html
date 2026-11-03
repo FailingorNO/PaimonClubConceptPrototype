@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>小游戏 · 派蒙社</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+<div class="container">
+    <div class="grid grid-2">
+        <div>
+            <div class="card">
+                <div class="card-title">游戏列表 <small>完成游戏可获得积分奖励</small></div>
+                <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))" id="game-list"></div>
+            </div>
+            <div class="card" id="play-card" style="display:none">
+                <div class="card-title"><span id="play-title">游戏</span>
+                    <small id="play-tip"></small></div>
+                <div id="play-area"></div>
+            </div>
+        </div>
+        <div>
+            <div class="card">
+                <div class="card-title">排行榜</div>
+                <div id="leaderboard"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">玩法说明</div>
+                <p class="hint">贪吃蛇：方向键或 WASD 控制，吃到元素球得分，撞墙或撞到自己结束。</p>
+                <p class="hint">2048：方向键或 WASD 移动，相同数字相撞合并，合成 2048 即通关。</p>
+                <p class="hint">猜数字：系统生成 1-100 的整数，你有 7 次机会，剩余次数越多得分越高。</p>
+                <p class="hint">抽卡模拟：点击十连，本次十连的五星数量决定得分。</p>
+                <p class="hint">同一游戏只有刷新个人最高分才会再次获得积分，防止重复刷分。</p>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    PC.renderNav('games');
+    if (!PC.requireLogin()) { throw new Error('need login'); }
+    var games = [];
+    var active = null;
+    var snakeTimer = null;
+
+    /* ------------------------------------------------------------
+     * 键盘监听集中管理。
+     * 原实现每次进入贪吃蛇都 addEventListener 且从不解绑，
+     * 玩过几次后同一个按键会被多个闭包同时处理，方向会错乱。
+     * ------------------------------------------------------------ */
+    var keyHandler = null;
+    function bindKeys(handler) {
+        if (keyHandler) {
+            document.removeEventListener('keydown', keyHandler);
+            keyHandler = null;
+        }
+        if (handler) {
+            keyHandler = handler;
+            document.addEventListener('keydown', handler);
+        }
+    }
+
+    function stopSnake() {
+        if (snakeTimer) { clearInterval(snakeTimer); snakeTimer = null; }
+    }
+
+    function loadGames() {
+        PC.api.get('games').then(function (list) {
+            games = list || [];
+            var host = document.getElementById('game-list');
+            if (!games.length) { host.innerHTML = PC.empty('暂无游戏'); return; }
+            host.innerHTML = games.map(function (g) {
+                var icon = g.icon || '🎮';
+                var iconHtml = icon.indexOf('.') > 0
+                    ? '<img src="' + PC.asset(icon) + '" alt="" style="width:44px;height:44px;object-fit:contain">'
+                    : '<span style="font-size:30px">' + PC.escapeHtml(icon) + '</span>';
+                return '<div class="card" style="margin:0;text-align:center">' +
+                    '<div style="height:44px;display:flex;align-items:center;justify-content:center">' + iconHtml + '</div>' +
+                    '<div style="font-weight:700;margin-top:6px">' + PC.escapeHtml(g.name) + '</div>' +
+                    '<div class="hint" style="min-height:34px">' + PC.escapeHtml(g.description || '') + '</div>' +
+                    '<div class="badge" style="margin-bottom:8px">最高 ' + (g.bestScore || 0) + ' 分 · 奖励 ' + (g.rewardPoints || 0) + ' 积分</div>' +
+                    '<button class="btn btn-sm btn-block" data-play="' + g.id + '">开始</button></div>';
+            }).join('');
+            host.querySelectorAll('[data-play]').forEach(function (b) {
+                b.addEventListener('click', function () { start(Number(b.getAttribute('data-play'))); });
+            });
+        }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    function loadLeaderboard(gameId) {
+        PC.api.get('games/' + gameId + '/leaderboard', { limit: 10 }).then(function (list) {
+            var host = document.getElementById('leaderboard');
+            if (!list || !list.length) { host.innerHTML = PC.empty('暂无成绩'); return; }
+            host.innerHTML = list.map(function (s) {
+                return '<div class="row"><span class="badge">' + s.rank + '</span>' +
+                    '<img class="avatar-sm" src="' + PC.avatar(s.avatarUrl) + '" alt="">' +
+                    '<div class="grow"><div class="name">' + PC.escapeHtml(s.userName || '') + '</div></div>' +
+                    '<span class="badge">' + s.score + '</span></div>';
+            }).join('');
+        }).catch(function () {});
+    }
+
+    function submitScore(gameId, score) {
+        PC.api.post('games/score', { gameId: gameId, score: score }).then(function (res) {
+            var gain = res.reward || 0;
+            PC.toast('得分 ' + score + (gain > 0 ? '，获得 ' + gain + ' 积分' : '，未超过个人最高分，本次无积分'));
+            loadLeaderboard(gameId);
+            loadGames();
+        }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    /* 后端新增 gameKey 字段；老数据没有时按名称兜底，保证任何一条记录都能落到正确玩法 */
+    function guessKeyByName(name) {
+        if (!name) { return ''; }
+        if (name.indexOf('蛇') >= 0) { return 'snake'; }
+        if (name.indexOf('2048') >= 0) { return '2048'; }
+        if (name.indexOf('猜') >= 0) { return 'guess'; }
+        if (name.indexOf('抽卡') >= 0) { return 'gacha'; }
+        return '';
+    }
+
+    function start(id) {
+        active = games.filter(function (g) { return g.id === id; })[0];
+        if (!active) { return; }
+        stopSnake();
+        bindKeys(null);
+        document.getElementById('play-card').style.display = '';
+        document.getElementById('play-title').textContent = active.name;
+        document.getElementById('play-tip').textContent = '奖励 ' + (active.rewardPoints || 0) + ' 积分 · 最高分 ' + (active.bestScore || 0);
+        var key = active.gameKey || guessKeyByName(active.name);
+        if (key === 'snake') { startSnake(active); }
+        else if (key === '2048') { start2048(active); }
+        else if (key === 'guess') { startGuess(active); }
+        else if (key === 'gacha') { startGachaSim(active); }
+        else { document.getElementById('play-area').innerHTML = PC.empty('该游戏暂未开放玩法'); }
+        loadLeaderboard(id);
+    }
+
+    /* ---------------- 贪吃蛇 ---------------- */
+    function startSnake(game) {
+        var area = document.getElementById('play-area');
+        area.innerHTML = '<div class="game-hud"><span>得分：<b id="sn-score">0</b></span>' +
+            '<button class="btn btn-sm btn-line" id="sn-restart">重新开始</button></div>' +
+            '<canvas class="game" id="snake" width="480" height="480" style="max-width:100%;height:auto"></canvas>' +
+            '<p class="hint" style="margin-top:8px">方向键 / WASD 控制方向，空格暂停</p>';
+        var canvas = document.getElementById('snake');
+        var ctx = canvas.getContext('2d');
+        var grid = 20, cells = canvas.width / grid;
+        var snake, dir, food, score, dead, paused, speed;
+
+        function reset() {
+            snake = [{ x: 8, y: 10 }, { x: 7, y: 10 }, { x: 6, y: 10 }];
+            dir = { x: 1, y: 0 };
+            score = 0;
+            dead = false;
+            paused = false;
+            speed = 150;
+            placeFood();
+            document.getElementById('sn-score').textContent = '0';
+        }
+
+        function placeFood() {
+            var guard = 0;
+            do {
+                food = { x: Math.floor(Math.random() * cells), y: Math.floor(Math.random() * cells) };
+                guard++;
+            } while (guard < 500 && snake.some(function (s) { return s.x === food.x && s.y === food.y; }));
+        }
+
+        function draw() {
+            ctx.fillStyle = '#0f1524';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#f7b731';
+            ctx.beginPath();
+            ctx.arc(food.x * grid + grid / 2, food.y * grid + grid / 2, grid / 2 - 2, 0, Math.PI * 2);
+            ctx.fill();
+            snake.forEach(function (s, i) {
+                ctx.fillStyle = i === 0 ? '#4a6cf7' : '#7d92f8';
+                ctx.fillRect(s.x * grid + 1, s.y * grid + 1, grid - 2, grid - 2);
+            });
+            if (dead) {
+                ctx.fillStyle = 'rgba(0,0,0,.6)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#fff';
+                ctx.font = '22px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('游戏结束：' + score + ' 分', canvas.width / 2, canvas.height / 2);
+            }
+        }
+
+        function step() {
+            if (dead || paused) { return; }
+            var head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+            if (head.x < 0 || head.y < 0 || head.x >= cells || head.y >= cells ||
+                snake.some(function (s) { return s.x === head.x && s.y === head.y; })) {
+                dead = true;
+                draw();
+                stopSnake();
+                if (score > 0) { submitScore(game.id, score); }
+                return;
+            }
+            snake.unshift(head);
+            if (head.x === food.x && head.y === food.y) {
+                score += 10;
+                document.getElementById('sn-score').textContent = score;
+                placeFood();
+                if (speed > 70) { speed -= 3; }
+                clearInterval(snakeTimer);
+                snakeTimer = setInterval(step, speed);
+            } else {
+                snake.pop();
+            }
+            draw();
+        }
+
+        bindKeys(function (e) {
+            var key = e.key.toLowerCase();
+            if (key === 'arrowup' || key === 'w') { if (dir.y === 0) { dir = { x: 0, y: -1 }; } e.preventDefault(); }
+            else if (key === 'arrowdown' || key === 's') { if (dir.y === 0) { dir = { x: 0, y: 1 }; } e.preventDefault(); }
+            else if (key === 'arrowleft' || key === 'a') { if (dir.x === 0) { dir = { x: -1, y: 0 }; } e.preventDefault(); }
+            else if (key === 'arrowright' || key === 'd') { if (dir.x === 0) { dir = { x: 1, y: 0 }; } e.preventDefault(); }
+            else if (key === ' ') { paused = !paused; e.preventDefault(); }
+        });
+        document.getElementById('sn-restart').addEventListener('click', function () {
+            stopSnake();
+            reset();
+            snakeTimer = setInterval(step, speed);
+            draw();
+        });
+        reset();
+        draw();
+        snakeTimer = setInterval(step, speed);
+    }
+
+    /* ---------------- 2048 ---------------- */
+    function start2048(game) {
+        var N = 4;
+        var area = document.getElementById('play-area');
+        area.innerHTML = '<div class="game-hud"><span>得分：<b id="g2-score">0</b></span>' +
+            '<span class="hint">最高分 ' + (game.bestScore || 0) + '</span>' +
+            '<button class="btn btn-sm btn-line" id="g2-restart">重新开始</button></div>' +
+            '<div class="g2048" id="g2-board"></div>' +
+            '<p class="hint" style="margin-top:8px">方向键 / WASD 移动方块，相同数字相撞合并；手机上可直接滑动</p>' +
+            '<div id="g2-over"></div>';
+        var boardEl = document.getElementById('g2-board');
+        var scoreEl = document.getElementById('g2-score');
+        var overEl = document.getElementById('g2-over');
+        var board, score, over, won;
+
+        function reset() {
+            board = [];
+            for (var y = 0; y < N; y++) {
+                var row = [];
+                for (var x = 0; x < N; x++) { row.push(0); }
+                board.push(row);
+            }
+            score = 0;
+            over = false;
+            won = false;
+            overEl.innerHTML = '';
+            addTile();
+            addTile();
+            render();
+        }
+
+        function addTile() {
+            var cells = [];
+            for (var y = 0; y < N; y++) {
+                for (var x = 0; x < N; x++) {
+                    if (!board[y][x]) { cells.push([x, y]); }
+                }
+            }
+            if (!cells.length) { return; }
+            var pick = cells[Math.floor(Math.random() * cells.length)];
+            board[pick[1]][pick[0]] = Math.random() < 0.9 ? 2 : 4;
+        }
+
+        function render() {
+            var html = '';
+            for (var y = 0; y < N; y++) {
+                for (var x = 0; x < N; x++) {
+                    var v = board[y][x];
+                    html += '<div class="cell"' + (v ? ' data-v="' + v + '"' : '') + '>' + (v || '') + '</div>';
+                }
+            }
+            boardEl.innerHTML = html;
+            scoreEl.textContent = score;
+        }
+
+        /* 把一行按移动方向摆正（索引 0 是目标方向），压缩合并后再写回 */
+        function getLine(dir, i) {
+            var line = [];
+            for (var k = 0; k < N; k++) {
+                if (dir === 'left') { line.push(board[i][k]); }
+                else if (dir === 'right') { line.push(board[i][N - 1 - k]); }
+                else if (dir === 'up') { line.push(board[k][i]); }
+                else { line.push(board[N - 1 - k][i]); }
+            }
+            return line;
+        }
+
+        function setLine(dir, i, line) {
+            for (var k = 0; k < N; k++) {
+                if (dir === 'left') { board[i][k] = line[k]; }
+                else if (dir === 'right') { board[i][N - 1 - k] = line[k]; }
+                else if (dir === 'up') { board[k][i] = line[k]; }
+                else { board[N - 1 - k][i] = line[k]; }
+            }
+        }
+
+        function slide(line) {
+            var packed = line.filter(function (v) { return v; });
+            var out = [];
+            var gained = 0;
+            for (var i = 0; i < packed.length; i++) {
+                if (i + 1 < packed.length && packed[i] === packed[i + 1]) {
+                    out.push(packed[i] * 2);
+                    gained += packed[i] * 2;
+                    i++;
+                } else {
+                    out.push(packed[i]);
+                }
+            }
+            while (out.length < N) { out.push(0); }
+            return { line: out, gained: gained };
+        }
+
+        function canMove() {
+            for (var y = 0; y < N; y++) {
+                for (var x = 0; x < N; x++) {
+                    if (!board[y][x]) { return true; }
+                    if (x + 1 < N && board[y][x] === board[y][x + 1]) { return true; }
+                    if (y + 1 < N && board[y][x] === board[y + 1][x]) { return true; }
+                }
+            }
+            return false;
+        }
+
+        function finish(text, good) {
+            over = true;
+            overEl.innerHTML = '<div class="game-over"><span>' + text + '</span>' +
+                '<button class="btn btn-sm" id="g2-again">再来一局</button></div>';
+            document.getElementById('g2-again').addEventListener('click', function () {
+                bindKeys(keyHandler2048);
+                reset();
+            });
+            if (score > 0) { submitScore(game.id, score); }
+        }
+
+        function move(dir) {
+            if (over) { return; }
+            var moved = false;
+            var gainedTotal = 0;
+            for (var i = 0; i < N; i++) {
+                var before = getLine(dir, i);
+                var result = slide(before);
+                if (result.line.join(',') !== before.join(',')) { moved = true; }
+                gainedTotal += result.gained;
+                setLine(dir, i, result.line);
+            }
+            if (!moved) { return; }
+            score += gainedTotal;
+            addTile();
+            render();
+            if (!won) {
+                for (var y = 0; y < N; y++) {
+                    if (board[y].indexOf(2048) >= 0) { won = true; break; }
+                }
+                if (won) { PC.toast('合成 2048，通关！继续挑战更高分'); }
+            }
+            if (!canMove()) { finish('没有可移动的方块了，本局结束', false); }
+        }
+
+        function keyHandler2048(e) {
+            var key = e.key.toLowerCase();
+            var dir = null;
+            if (key === 'arrowup' || key === 'w') { dir = 'up'; }
+            else if (key === 'arrowdown' || key === 's') { dir = 'down'; }
+            else if (key === 'arrowleft' || key === 'a') { dir = 'left'; }
+            else if (key === 'arrowright' || key === 'd') { dir = 'right'; }
+            if (!dir) { return; }
+            e.preventDefault();
+            move(dir);
+        }
+
+        /* 移动端滑动支持 */
+        var startX = 0, startY = 0;
+        boardEl.addEventListener('touchstart', function (e) {
+            if (!e.touches.length) { return; }
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+        }, { passive: true });
+        boardEl.addEventListener('touchend', function (e) {
+            if (!e.changedTouches.length) { return; }
+            var dx = e.changedTouches[0].clientX - startX;
+            var dy = e.changedTouches[0].clientY - startY;
+            if (Math.abs(dx) < 24 && Math.abs(dy) < 24) { return; }
+            if (Math.abs(dx) > Math.abs(dy)) { move(dx > 0 ? 'right' : 'left'); }
+            else { move(dy > 0 ? 'down' : 'up'); }
+        }, { passive: true });
+
+        document.getElementById('g2-restart').addEventListener('click', function () {
+            bindKeys(keyHandler2048);
+            reset();
+        });
+        bindKeys(keyHandler2048);
+        reset();
+    }
+
+    /* ---------------- 猜数字 ---------------- */
+    function startGuess(game) {
+        var area = document.getElementById('play-area');
+        var target = Math.floor(Math.random() * 100) + 1;
+        var left = 7;
+        var done = false;
+        area.innerHTML = '<div class="game-hud"><span>剩余次数：<b id="gs-left">7</b></span></div>' +
+            '<div style="display:flex;gap:8px;max-width:360px">' +
+            '<input class="input" id="gs-input" type="number" min="1" max="100" placeholder="输入 1-100">' +
+            '<button class="btn" id="gs-go">猜</button></div>' +
+            '<div id="gs-log" style="margin-top:12px;color:#4c5666"></div>';
+
+        function log(text) {
+            var host = document.getElementById('gs-log');
+            host.innerHTML = '<div>' + text + '</div>' + host.innerHTML;
+        }
+
+        function finish(win) {
+            done = true;
+            var score = win ? left * 15 : 0;
+            log(win ? '🎉 猜对了！答案就是 ' + target : '😢 机会用完了，答案是 ' + target);
+            document.getElementById('gs-go').disabled = true;
+            if (score > 0) { submitScore(game.id, score); }
+        }
+
+        function guess() {
+            if (done) { return; }
+            var value = parseInt(document.getElementById('gs-input').value, 10);
+            if (!value || value < 1 || value > 100) { PC.toast('请输入 1-100 的整数'); return; }
+            left--;
+            document.getElementById('gs-left').textContent = left;
+            if (value === target) { finish(true); return; }
+            log(value + ' → ' + (value < target ? '偏小' : '偏大'));
+            if (left <= 0) { finish(false); }
+        }
+
+        document.getElementById('gs-go').addEventListener('click', guess);
+        document.getElementById('gs-input').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); guess(); }
+        });
+        document.getElementById('gs-input').focus();
+    }
+
+    /* ---------------- 抽卡模拟 ---------------- */
+    function startGachaSim(game) {
+        var area = document.getElementById('play-area');
+        area.innerHTML = '<div class="game-hud"><span>本次五星：<b id="gc-five">0</b></span>' +
+            '<span class="hint" id="gc-score"></span>' +
+            '<button class="btn btn-sm" id="gc-pull">十连抽</button></div>' +
+            '<div class="pull-grid" id="gc-grid"></div>';
+        var names5 = ['琴', '迪卢克', '刻晴', '莫娜', '七七', '胡桃', '雷电将军', '纳西妲'];
+        var names4 = ['行秋', '香菱', '班尼特', '菲谢尔', '北斗', '凝光', '重云', '砂糖'];
+        var names3 = ['西风剑', '祭礼剑', '弓藏', '绝弦', '匣里灭辰', '流浪乐章', '黑缨枪'];
+        document.getElementById('gc-pull').addEventListener('click', function () {
+            var five = 0;
+            var items = [];
+            for (var i = 0; i < 10; i++) {
+                var r = Math.random();
+                var rarity = r < 0.016 ? 5 : r < 0.146 ? 4 : 3;
+                if (rarity === 5) { five++; }
+                var pool = rarity === 5 ? names5 : rarity === 4 ? names4 : names3;
+                items.push({ name: pool[Math.floor(Math.random() * pool.length)], rarity: rarity });
+            }
+            document.getElementById('gc-five').textContent = five;
+            var score = five * 20 + 5;
+            document.getElementById('gc-score').textContent = '本次得分 ' + score;
+            document.getElementById('gc-grid').innerHTML = items.map(function (it) {
+                return '<div class="pull-item ' + (it.rarity === 5 ? 'r5' : it.rarity === 4 ? 'r4' : '') + '">' +
+                    it.name + '<div style="font-size:11px">' + it.rarity + '★</div></div>';
+            }).join('');
+            submitScore(game.id, score);
+        });
+    }
+
+    window.addEventListener('beforeunload', function () {
+        stopSnake();
+        bindKeys(null);
+    });
+
+    loadGames();
+</script>
+</body>
+</html>

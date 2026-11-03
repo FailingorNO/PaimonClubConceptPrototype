@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>个人中心 · 派蒙社</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+<div class="container">
+    <div class="grid grid-2">
+        <div>
+            <div class="card" id="profile-card"><div class="empty">加载中...</div></div>
+            <div class="card">
+                <div class="tabs" id="tabs">
+                    <div class="tab active" data-tab="posts">我的帖子</div>
+                    <div class="tab" data-tab="points">积分明细</div>
+                    <div class="tab" data-tab="orders">兑换记录</div>
+                    <div class="tab" data-tab="decorations">我的装扮</div>
+                    <div class="tab" data-tab="notifications">通知</div>
+                </div>
+                <div id="tab-body"></div>
+            </div>
+        </div>
+        <div>
+            <div class="card">
+                <div class="card-title">每日签到</div>
+                <div id="signin-box"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">账号资料</div>
+                <div id="edit-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    PC.renderNav('user');
+    if (!PC.requireLogin()) { throw new Error('need login'); }
+    var me = PC.Store.user();
+    var targetId = PC.param('id') ? Number(PC.param('id')) : me.id;
+    var isSelf = targetId === me.id;
+    var tab = 'posts';
+
+    function renderProfile(u) {
+        document.getElementById('profile-card').innerHTML =
+            '<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">' +
+            PC.avatarBox(u) +
+            '<div class="grow"><div style="font-size:19px;font-weight:700">' +
+            PC.escapeHtml(u.nickname || u.username) + ' ' +
+            (u.wearingTitle ? '<span class="tag">' + PC.escapeHtml(u.wearingTitle) + '</span>' : '') +
+            (u.role === 'ADMIN' ? '<span class="tag tag-danger">管理员</span>' : '') +
+            (u.role === 'MODERATOR' ? '<span class="tag tag-warn">审核员</span>' : '') + '</div>' +
+            '<div class="sub" style="color:#7c8798">@' + PC.escapeHtml(u.username) + ' · ' + PC.escapeHtml(u.bio || '这个人很神秘，什么都没写') + '</div>' +
+            '<div class="post-meta"><span>积分 ' + (u.points || 0) + '</span><span>帖子 ' + (u.postCount || 0) + '</span>' +
+            '<span>关注 ' + (u.followees || 0) + '</span><span>粉丝 ' + (u.followers || 0) + '</span></div></div>' +
+            (isSelf ? '' : '<button class="btn btn-sm" id="btn-follow">' + (u.followed ? '已关注' : '关注') + '</button>') +
+            '</div>';
+        var follow = document.getElementById('btn-follow');
+        if (follow) {
+            follow.addEventListener('click', function () {
+                PC.api.post('social/follow/' + u.id).then(function (on) {
+                    PC.toast(on ? '已关注' : '已取消关注');
+                    loadProfile();
+                }).catch(function (e) { PC.toast(e.message); });
+            });
+        }
+    }
+
+    function renderSignIn() {
+        var host = document.getElementById('signin-box');
+        if (!isSelf) { host.innerHTML = PC.empty('仅本人可签到'); return; }
+        host.innerHTML = '<p class="hint">每天签到可获得积分奖励，连续签到更多。</p>' +
+            '<button class="btn btn-block" id="btn-signin">立即签到</button>';
+        document.getElementById('btn-signin').addEventListener('click', function () {
+            PC.api.post('users/sign-in').then(function (res) {
+                PC.toast(res.message || ('签到成功，获得 ' + res.gain + ' 积分'));
+                loadProfile();
+            }).catch(function (e) { PC.toast(e.message); });
+        });
+    }
+
+    function renderEdit(u) {
+        var host = document.getElementById('edit-box');
+        if (!isSelf) { host.innerHTML = PC.empty('仅本人可修改资料'); return; }
+        host.innerHTML =
+            '<div class="field"><label>昵称</label><input class="input" id="e-nickname" value="' + PC.escapeHtml(u.nickname || '') + '"></div>' +
+            '<div class="field"><label>头像地址</label><input class="input" id="e-avatar" value="' + PC.escapeHtml(u.avatarUrl || '') + '"></div>' +
+            '<div class="field"><label>个性签名</label><input class="input" id="e-bio" value="' + PC.escapeHtml(u.bio || '') + '"></div>' +
+            '<div class="field"><label>邮箱</label><input class="input" id="e-email" value="' + PC.escapeHtml(u.email || '') + '"></div>' +
+            '<div class="field"><label>手机号</label><input class="input" id="e-phone" value="' + PC.escapeHtml(u.phone || '') + '"></div>' +
+            '<button class="btn btn-block" id="btn-save">保存资料</button>' +
+            '<button class="btn btn-line btn-block" id="btn-pwd" style="margin-top:10px">修改密码</button>';
+        document.getElementById('btn-save').addEventListener('click', function () {
+            PC.api.put('users/me', {
+                nickname: document.getElementById('e-nickname').value.trim(),
+                avatarUrl: document.getElementById('e-avatar').value.trim(),
+                bio: document.getElementById('e-bio').value.trim(),
+                email: document.getElementById('e-email').value.trim(),
+                phone: document.getElementById('e-phone').value.trim()
+            }).then(function (updated) {
+                PC.Store.setUser(updated);
+                PC.toast('资料已更新');
+                loadProfile();
+                PC.renderNav('user');
+            }).catch(function (e) { PC.toast(e.message); });
+        });
+        document.getElementById('btn-pwd').addEventListener('click', function () {
+            PC.modal('修改密码',
+                '<div class="field"><label>原密码</label><input class="input" id="p-old" type="password"></div>' +
+                '<div class="field"><label>新密码</label><input class="input" id="p-new" type="password"></div>',
+                function (mask) {
+                    var oldPwd = mask.querySelector('#p-old').value;
+                    var newPwd = mask.querySelector('#p-new').value;
+                    if (!oldPwd || newPwd.length < 6) { PC.toast('请填写正确的密码'); return false; }
+                    PC.api.put('users/me/password', { oldPassword: oldPwd, newPassword: newPwd })
+                        .then(function () { PC.toast('密码已修改'); })
+                        .catch(function (e) { PC.toast(e.message); });
+                }, '保存');
+        });
+    }
+
+    function loadTab() {
+        var host = document.getElementById('tab-body');
+        host.innerHTML = PC.empty('加载中...');
+        /* 积分明细、订单、装扮、通知都属于本人私有数据，看别人主页时不能拉自己的数据顶上 */
+        var privateTabs = { points: '积分明细', orders: '兑换记录', decorations: '我的装扮', notifications: '消息通知' };
+        if (!isSelf && privateTabs[tab]) {
+            host.innerHTML = PC.empty(privateTabs[tab] + '仅本人可见');
+            return;
+        }
+        if (tab === 'posts') {
+            PC.api.get('posts/mine', { page: 1, size: 20 }).then(function (data) {
+                if (!isSelf) { return loadUserPosts(); }
+                if (!data.items || !data.items.length) { host.innerHTML = PC.empty('还没有发布帖子'); return; }
+                host.innerHTML = data.items.map(function (p) {
+                    return '<div class="row"><div class="grow"><a class="name" href="post-detail.html?id=' + p.id + '">' +
+                        PC.escapeHtml(p.title) + '</a><div class="sub">' + PC.fmtTime(p.createdAt) +
+                        ' · 👍 ' + (p.likeCount || 0) + ' · 💬 ' + (p.commentCount || 0) + '</div></div>' +
+                        '<span class="tag">' + (p.status === 'PUBLISHED' ? '已发布' : p.status === 'PENDING' ? '待审核' : '未通过') + '</span></div>';
+                }).join('');
+            }).catch(function (e) { host.innerHTML = PC.empty(e.message); });
+        } else if (tab === 'points') {
+            PC.api.get('users/points/records', { page: 1, size: 20 }).then(function (data) {
+                if (!data.items || !data.items.length) { host.innerHTML = PC.empty('暂无积分记录'); return; }
+                host.innerHTML = '<table class="table"><tr><th>时间</th><th>类型</th><th>说明</th><th>积分</th></tr>' +
+                    data.items.map(function (r) {
+                        return '<tr><td>' + PC.fmtTime(r.createdAt) + '</td><td>' + PC.escapeHtml(PC.label('pointsType', r.type)) + '</td>' +
+                            '<td>' + PC.escapeHtml(r.description || '') + '</td>' +
+                            '<td style="color:' + (r.amount >= 0 ? '#2f9e44' : '#e5484d') + '">' + (r.amount > 0 ? '+' : '') + r.amount + '</td></tr>';
+                    }).join('') + '</table>';
+            }).catch(function (e) { host.innerHTML = PC.empty(e.message); });
+        } else if (tab === 'orders') {
+            PC.api.get('mall/orders/mine', { page: 1, size: 20 }).then(function (data) {
+                if (!data.items || !data.items.length) { host.innerHTML = PC.empty('还没有兑换记录'); return; }
+                host.innerHTML = data.items.map(function (o) {
+                    return '<div class="row"><div class="grow"><div class="name">' + PC.escapeHtml(o.productName) + '</div>' +
+                        '<div class="sub">' + PC.fmtTime(o.createdAt) + '</div></div>' +
+                        '<span class="badge">-' + o.pointsCost + ' 积分</span>' +
+                        '<span class="tag tag-ok">' + PC.escapeHtml(PC.label('order', o.status)) + '</span></div>';
+                }).join('');
+            }).catch(function (e) { host.innerHTML = PC.empty(e.message); });
+        } else if (tab === 'decorations') {
+            PC.api.get('mall/decorations/mine').then(function (list) {
+                if (!list || !list.length) { host.innerHTML = PC.empty('还没有装扮，去商城看看'); return; }
+                host.innerHTML = list.map(function (d) {
+                    return '<div class="row"><div class="grow"><div class="name">' + PC.escapeHtml(d.name) + '</div>' +
+                        '<div class="sub">' + PC.escapeHtml(PC.label('decoType', d.type)) + (d.wearing ? ' · 佩戴中' : '') + '</div></div>' +
+                        (d.wearing ? '<button class="btn btn-sm btn-line" data-unwear="' + d.id + '">卸下</button>'
+                            : '<button class="btn btn-sm" data-wear="' + d.id + '">佩戴</button>') + '</div>';
+                }).join('');
+                host.querySelectorAll('[data-wear]').forEach(function (b) {
+                    b.addEventListener('click', function () {
+                        PC.api.post('mall/decorations/' + b.getAttribute('data-wear') + '/wear')
+                            .then(function () { PC.toast('已佩戴'); PC.refreshMe(); loadProfile(); loadTab(); })
+                            .catch(function (e) { PC.toast(e.message); });
+                    });
+                });
+                host.querySelectorAll('[data-unwear]').forEach(function (b) {
+                    b.addEventListener('click', function () {
+                        PC.api.del('mall/decorations/' + b.getAttribute('data-unwear') + '/wear')
+                            .then(function () { PC.toast('已卸下'); PC.refreshMe(); loadProfile(); loadTab(); })
+                            .catch(function (e) { PC.toast(e.message); });
+                    });
+                });
+            }).catch(function (e) { host.innerHTML = PC.empty(e.message); });
+        } else if (tab === 'notifications') {
+            PC.api.get('users/notifications', { page: 1, size: 20 }).then(function (data) {
+                if (!data.items || !data.items.length) { host.innerHTML = PC.empty('暂无通知'); return; }
+                host.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:8px">' +
+                    '<button class="btn btn-sm btn-line" id="btn-readall">全部已读</button></div>' +
+                    data.items.map(function (n) {
+                        /* 同类通知（点赞/评论/关注）后端会合并计数，这里补一个「等 N 条」提示 */
+                        var merged = (n.mergeCount && n.mergeCount > 1)
+                            ? '<span class="tag">等 ' + n.mergeCount + ' 条</span>' : '';
+                        return '<div class="row"><div class="grow"><div class="name">' + PC.escapeHtml(n.content) + '</div>' +
+                            '<div class="sub">' + PC.fmtTime(n.createdAt) + '</div></div>' + merged +
+                            (n.isRead ? '' : '<span class="tag tag-warn">未读</span>') + '</div>';
+                    }).join('');
+                document.getElementById('btn-readall').addEventListener('click', function () {
+                    PC.api.post('users/notifications/read').then(function () {
+                        PC.toast('已全部标记为已读');
+                        loadTab();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            }).catch(function (e) { host.innerHTML = PC.empty(e.message); });
+        }
+    }
+
+    function loadUserPosts() {
+        var host = document.getElementById('tab-body');
+        PC.api.get('posts', { page: 1, size: 20 }).then(function (data) {
+            var mine = (data.items || []).filter(function (p) { return p.userId === targetId; });
+            host.innerHTML = mine.length ? mine.map(function (p) {
+                return '<div class="row"><div class="grow"><a class="name" href="post-detail.html?id=' + p.id + '">' +
+                    PC.escapeHtml(p.title) + '</a><div class="sub">' + PC.fmtTime(p.createdAt) + '</div></div></div>';
+            }).join('') : PC.empty('暂无公开帖子');
+        }).catch(function (e) { host.innerHTML = PC.empty(e.message); });
+    }
+
+    function loadProfile() {
+        PC.api.get('users/' + targetId).then(function (u) {
+            renderProfile(u);
+            renderSignIn();
+            renderEdit(u);
+            if (isSelf) { PC.Store.setUser(u); }
+        }).catch(function (e) {
+            document.getElementById('profile-card').innerHTML = PC.empty(e.message);
+        });
+    }
+
+    document.querySelectorAll('#tabs .tab').forEach(function (t) {
+        t.addEventListener('click', function () {
+            document.querySelectorAll('#tabs .tab').forEach(function (x) { x.classList.remove('active'); });
+            t.classList.add('active');
+            tab = t.getAttribute('data-tab');
+            loadTab();
+        });
+    });
+
+    if (!isSelf) {
+        ['points', 'orders', 'decorations', 'notifications'].forEach(function (key) {
+            var el = document.querySelector('#tabs .tab[data-tab="' + key + '"]');
+            if (el) { el.style.display = 'none'; }
+        });
+    }
+
+    loadProfile();
+    loadTab();
+</script>
+</body>
+</html>

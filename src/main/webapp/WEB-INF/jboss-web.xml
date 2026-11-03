@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 部署到 WildFly 时的上下文根，访问地址 http://localhost:8080/ -->
+<jboss-web xmlns="urn:jboss:jakartaee:1.0"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xsi:schemaLocation="urn:jboss:jakartaee:1.0 https://www.jboss.org/jbossweb/3.0.xsd">
+    <context-root>/</context-root>
+</jboss-web>

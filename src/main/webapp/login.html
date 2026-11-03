@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 · 派蒙社</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+<div class="container" style="max-width:460px">
+    <div class="card" style="margin-top:40px">
+        <div class="card-title">登录派蒙社</div>
+        <div class="field">
+            <label>用户名</label>
+            <input class="input" id="username" placeholder="请输入用户名" autocomplete="username">
+        </div>
+        <div class="field">
+            <label>密码</label>
+            <input class="input" id="password" type="password" placeholder="请输入密码" autocomplete="current-password">
+        </div>
+        <button class="btn btn-block" id="btn-login">登录</button>
+        <p class="hint" style="margin-top:14px">
+            还没有账号？<a href="register.html">立即注册</a>
+        </p>
+        <p class="hint">系统管理员：admin / admin123</p>
+    </div>
+</div>
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    PC.renderNav('');
+    document.getElementById('btn-login').addEventListener('click', function () {
+        var username = document.getElementById('username').value.trim();
+        var password = document.getElementById('password').value;
+        if (!username || !password) { PC.toast('请填写用户名和密码'); return; }
+        var btn = this;
+        btn.disabled = true;
+        PC.api.post('auth/login', { username: username, password: password }).then(function (data) {
+            PC.login(data.user, data.token);
+            PC.toast('登录成功');
+            var redirect = PC.param('redirect', 'index.html');
+            if (/^(https?:)?\/\//i.test(redirect)) { redirect = 'index.html'; }
+            setTimeout(function () { location.href = redirect; }, 500);
+        }).catch(function (e) {
+            PC.toast(e.message);
+            btn.disabled = false;
+        });
+    });
+    document.getElementById('password').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { document.getElementById('btn-login').click(); }
+    });
+</script>
+</body>
+</html>

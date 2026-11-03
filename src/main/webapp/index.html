@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>派蒙社 · 玩家社区</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+
+<div class="container">
+    <div class="grid grid-2">
+        <div>
+            <div class="card">
+                <div class="card-title">
+                    <span>社区帖子</span>
+                    <small id="audit-hint"></small>
+                </div>
+                <div class="tabs" id="cat-tabs"></div>
+                <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+                    <input class="input" id="kw" placeholder="搜索标题或内容" style="flex:1;min-width:180px">
+                    <select class="select" id="sort" style="width:130px">
+                        <option value="NEW">最新发布</option>
+                        <option value="HOT">最热</option>
+                        <option value="COMMENT">评论最多</option>
+                    </select>
+                    <button class="btn" id="btn-search">搜索</button>
+                </div>
+                <div id="post-list"></div>
+                <div id="pager"></div>
+            </div>
+        </div>
+        <div>
+            <div class="card">
+                <div class="card-title">热门帖子</div>
+                <div id="hot-list"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">积分排行榜</div>
+                <div id="rank-list"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">快捷入口</div>
+                <div style="display:grid;gap:10px">
+                    <a class="btn btn-ghost btn-block" href="gacha-analysis.html">抽卡记录分析</a>
+                    <a class="btn btn-ghost btn-block" href="game-data.html">绑定游戏 UID</a>
+                    <a class="btn btn-ghost btn-block" href="mall.html">积分商城兑换</a>
+                    <a class="btn btn-ghost btn-block" href="games.html">小游戏赚积分</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    var state = { categoryId: '', keyword: '', sort: 'NEW', page: 1, size: 8 };
+
+    PC.renderNav('index');
+
+    function postCard(p) {
+        var statusTag = '';
+        if (p.status === 'PENDING') { statusTag = '<span class="tag tag-warn">待审核</span>'; }
+        if (p.status === 'REJECTED') { statusTag = '<span class="tag tag-danger">未通过</span>'; }
+        return '<div class="post" data-id="' + p.id + '">' +
+            '<div class="post-head">' +
+            '<img class="avatar-sm" src="' + PC.avatar(p.authorAvatar) + '" alt="">' +
+            '<div class="grow"><div class="name">' + PC.escapeHtml(p.authorName || '匿名') + '</div>' +
+            '<div class="sub">' + PC.fmtTime(p.createdAt) + ' · ' + PC.escapeHtml(p.categoryName || '') + '</div></div>' +
+            (p.top ? '<span class="tag tag-ok">置顶</span>' : '') + statusTag +
+            '</div>' +
+            '<div class="post-title">' + PC.escapeHtml(p.title) + '</div>' +
+            '<div class="post-summary">' + PC.escapeHtml(p.summary || '') + '</div>' +
+            '<div class="post-meta">' +
+            '<span>👍 ' + (p.likeCount || 0) + '</span>' +
+            '<span>💬 ' + (p.commentCount || 0) + '</span>' +
+            '<span>👁 ' + (p.viewCount || 0) + '</span>' +
+            '<span>⭐ ' + (p.favoriteCount || 0) + '</span>' +
+            '</div></div>';
+    }
+
+    function loadCategories() {
+        PC.api.get('posts/categories').then(function (list) {
+            var html = '<div class="tab active" data-id="">全部</div>';
+            (list || []).forEach(function (c) {
+                html += '<div class="tab" data-id="' + c.id + '">' + PC.escapeHtml(c.name) + '</div>';
+            });
+            var host = document.getElementById('cat-tabs');
+            host.innerHTML = html;
+            host.querySelectorAll('.tab').forEach(function (t) {
+                t.addEventListener('click', function () {
+                    host.querySelectorAll('.tab').forEach(function (x) { x.classList.remove('active'); });
+                    t.classList.add('active');
+                    state.categoryId = t.getAttribute('data-id');
+                    state.page = 1;
+                    loadPosts();
+                });
+            });
+        }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    function loadPosts() {
+        PC.api.get('posts', {
+            categoryId: state.categoryId, keyword: state.keyword,
+            sort: state.sort, page: state.page, size: state.size
+        }).then(function (data) {
+            var host = document.getElementById('post-list');
+            if (!data || !data.items || !data.items.length) {
+                host.innerHTML = PC.empty('还没有帖子，快来发布第一篇吧');
+                document.getElementById('pager').innerHTML = '';
+                return;
+            }
+            host.innerHTML = data.items.map(function (p) {
+                return '<div style="margin-bottom:14px">' + postCard(p) + '</div>';
+            }).join('');
+            host.querySelectorAll('.post').forEach(function (el) {
+                el.addEventListener('click', function () {
+                    location.href = 'post-detail.html?id=' + el.getAttribute('data-id');
+                });
+            });
+            PC.pager('pager', data.page, data.pages, function (p) { state.page = p; loadPosts(); });
+        }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    function loadHot() {
+        PC.api.get('posts/hot', { limit: 5 }).then(function (list) {
+            var host = document.getElementById('hot-list');
+            if (!list || !list.length) { host.innerHTML = PC.empty(); return; }
+            host.innerHTML = list.map(function (p, i) {
+                return '<div class="row"><span class="badge">' + (i + 1) + '</span>' +
+                    '<div class="grow"><a class="name" href="post-detail.html?id=' + p.id + '">' + PC.escapeHtml(p.title) + '</a>' +
+                    '<div class="sub">👍 ' + (p.likeCount || 0) + ' · 💬 ' + (p.commentCount || 0) + '</div></div></div>';
+            }).join('');
+        }).catch(function () {});
+    }
+
+    function loadRank() {
+        PC.api.get('users/points/ranking', { limit: 8 }).then(function (list) {
+            var host = document.getElementById('rank-list');
+            if (!list || !list.length) { host.innerHTML = PC.empty(); return; }
+            host.innerHTML = list.map(function (u, i) {
+                return '<div class="row"><span class="badge">' + (i + 1) + '</span>' +
+                    '<img class="avatar-sm" src="' + PC.avatar(u.avatarUrl) + '" alt="">' +
+                    '<div class="grow"><a class="name" href="user-center.html?id=' + u.id + '">' + PC.escapeHtml(u.nickname || u.username) + '</a>' +
+                    '<div class="sub">' + (u.points || 0) + ' 积分</div></div></div>';
+            }).join('');
+        }).catch(function () {});
+    }
+
+    document.getElementById('btn-search').addEventListener('click', function () {
+        state.keyword = document.getElementById('kw').value.trim();
+        state.page = 1;
+        loadPosts();
+    });
+    document.getElementById('kw').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { document.getElementById('btn-search').click(); }
+    });
+    document.getElementById('sort').addEventListener('change', function () {
+        state.sort = this.value;
+        state.page = 1;
+        loadPosts();
+    });
+
+    loadCategories();
+    loadPosts();
+    loadHot();
+    loadRank();
+</script>
+</body>
+</html>

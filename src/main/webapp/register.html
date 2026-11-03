@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>注册 · 派蒙社</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+<div class="container" style="max-width:460px">
+    <div class="card" style="margin-top:40px">
+        <div class="card-title">注册新账号</div>
+        <div class="field">
+            <label>用户名 <span class="hint">3-20 位，用于登录</span></label>
+            <input class="input" id="username" placeholder="请输入用户名" autocomplete="username">
+        </div>
+        <div class="field">
+            <label>昵称 <span class="hint">选填，社区展示名称</span></label>
+            <input class="input" id="nickname" placeholder="旅行者">
+        </div>
+        <div class="field">
+            <label>邮箱 <span class="hint">选填</span></label>
+            <input class="input" id="email" placeholder="you@example.com">
+        </div>
+        <div class="field">
+            <label>密码 <span class="hint">6-32 位</span></label>
+            <input class="input" id="password" type="password" autocomplete="new-password">
+        </div>
+        <div class="field">
+            <label>确认密码</label>
+            <input class="input" id="password2" type="password" autocomplete="new-password">
+        </div>
+        <button class="btn btn-block" id="btn-register">注册并登录</button>
+        <p class="hint" style="margin-top:14px">已有账号？<a href="login.html">直接登录</a></p>
+    </div>
+</div>
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    PC.renderNav('');
+    document.getElementById('btn-register').addEventListener('click', register);
+
+    /* 表单里任意输入框回车都能直接提交，符合用户习惯 */
+    document.querySelectorAll('input').forEach(function (el) {
+        el.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); register(); }
+        });
+    });
+
+    function register() {
+        var username = document.getElementById('username').value.trim();
+        var password = document.getElementById('password').value;
+        var password2 = document.getElementById('password2').value;
+        var nickname = document.getElementById('nickname').value.trim();
+        var email = document.getElementById('email').value.trim();
+        if (username.length < 3) { PC.toast('用户名至少 3 位'); return; }
+        if (password.length < 6) { PC.toast('密码至少 6 位'); return; }
+        if (password !== password2) { PC.toast('两次输入的密码不一致'); return; }
+        var btn = this;
+        btn.disabled = true;
+        PC.api.post('auth/register', {
+            username: username, password: password, nickname: nickname || username, email: email
+        }).then(function (data) {
+            PC.login(data.user, data.token);
+            var bonus = (data.user && data.user.points) || 0;
+            PC.toast(bonus > 0 ? '注册成功，新人礼包 ' + bonus + ' 积分已到账' : '注册成功');
+            setTimeout(function () { location.href = 'mall.html'; }, 900);
+        }).catch(function (e) {
+            PC.toast(e.message);
+            btn.disabled = false;
+        });
+    }
+</script>
+</body>
+</html>

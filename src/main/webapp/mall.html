@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>积分商城 · 派蒙社</title>
+    <link rel="stylesheet" href="static/css/main.css?v=20261103b">
+</head>
+<body>
+<div id="pc-nav"></div>
+<div class="container">
+    <div class="card">
+        <div class="card-title">
+            <span>积分商城</span>
+            <small id="points-hint"></small>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <input class="input" id="kw" placeholder="搜索商品" style="flex:1;min-width:180px">
+            <select class="select" id="type" style="width:150px">
+                <option value="">全部类型</option>
+                <option value="PHYSICAL">实物周边</option>
+                <option value="VIRTUAL">虚拟奖励</option>
+                
+            </select>
+            <button class="btn" id="btn-search">搜索</button>
+        </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;padding:12px 16px">
+        <div class="hint" id="points-tip"></div>
+    </div>
+
+    <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr));margin-top:16px" id="product-list"></div>
+    <div id="pager"></div>
+
+    <div class="card" style="margin-top:20px">
+        <div class="card-title">装扮商店 <small>佩戴后可展示在个人主页</small></div>
+        <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr))" id="decoration-list"></div>
+    </div>
+
+    <div class="card" style="margin-top:20px">
+        <div class="card-title">我的兑换记录</div>
+        <div id="order-list"></div>
+    </div>
+</div>
+<script src="static/js/api.js?v=20261103b"></script>
+<script>
+    PC.renderNav('mall');
+    var page = 1, size = 12;
+
+    /* 后端返回的是英文枚举，展示层统一映射为中文 */
+    var ORDER_STATUS = {
+        CREATED: '待发货', PENDING: '待发货', PAID: '已支付', SHIPPED: '已发货',
+        COMPLETED: '已完成', DONE: '已完成', CANCELED: '已取消', REJECTED: '已驳回'
+    };
+    var DECO_TYPE = { AVATAR_FRAME: '头像框', TITLE: '专属头衔' };
+    function orderStatusText(status) { return ORDER_STATUS[status] || status || ''; }
+    function decoTypeText(type) { return DECO_TYPE[type] || type || ''; }
+
+    function loadMe() {
+        if (!PC.Store.token()) { document.getElementById('points-hint').textContent = '登录后可用积分兑换'; return; }
+        PC.api.get('users/me').then(function (u) {
+            document.getElementById('points-hint').textContent = '当前积分：' + (u.points || 0);
+        }).catch(function () {});
+    }
+
+    function loadProducts() {
+        PC.api.get('mall/products', {
+            keyword: document.getElementById('kw').value.trim(),
+            type: document.getElementById('type').value,
+            page: page, size: size
+        }).then(function (data) {
+            var host = document.getElementById('product-list');
+            if (!data.items || !data.items.length) { host.innerHTML = PC.empty('暂无商品'); return; }
+            host.innerHTML = data.items.map(function (p) {
+                return '<div class="card" style="margin:0">' +
+                    '<div style="height:120px;border-radius:10px;background:linear-gradient(135deg,#eef1f9,#dfe6fb);display:flex;align-items:center;justify-content:center;font-size:34px">' +
+                    (p.type === 'VIRTUAL' ? '💎' : p.type === 'PHYSICAL' ? '🎁' : '🛍️') + '</div>' +
+                    '<div style="font-weight:700;margin-top:10px">' + PC.escapeHtml(p.name) + '</div>' +
+                    '<div class="hint" style="min-height:38px">' + PC.escapeHtml(p.description || '') + '</div>' +
+                    '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">' +
+                    '<span class="badge">' + p.pricePoints + ' 积分</span>' +
+                    '<span class="hint">库存 ' + p.stock + '</span></div>' +
+                    '<button class="btn btn-block btn-sm" style="margin-top:10px" data-buy="' + p.id +
+                    '" data-type="' + PC.escapeHtml(p.type || '') + '" data-name="' + PC.escapeHtml(p.name) + '"' +
+                    (p.stock <= 0 ? ' disabled' : '') + '>' + (p.stock <= 0 ? '已售罄' : '立即兑换') + '</button>' +
+                    '</div>';
+            }).join('');
+            host.querySelectorAll('[data-buy]').forEach(function (b) {
+                b.addEventListener('click', function () { exchange(b); });
+            });
+            PC.pager('pager', data.page, data.pages, function (p) { page = p; loadProducts(); });
+        }).catch(function (e) { PC.toast(e.message); });
+    }
+
+    function exchange(btn) {
+        if (!PC.Store.token()) { PC.toast('请先登录'); return; }
+        var productId = Number(btn.getAttribute('data-buy'));
+        var type = btn.getAttribute('data-type') || '';
+        var name = btn.getAttribute('data-name') || '';
+        /* 实物兑换必须留下收货信息，否则管理员无法发货 */
+        var physical = type === 'PHYSICAL';
+        var body;
+        if (physical) {
+            body = '<p>兑换「' + PC.escapeHtml(name) + '」后需要邮寄，请填写收货信息。</p>' +
+                '<div class="field"><label>收货人</label>' +
+                '<input class="input" id="rcv-name" maxlength="20" placeholder="真实姓名"></div>' +
+                '<div class="field"><label>手机号</label>' +
+                '<input class="input" id="rcv-phone" maxlength="20" placeholder="11 位手机号"></div>' +
+                '<div class="field"><label>收货地址</label>' +
+                '<textarea class="input" id="rcv-addr" rows="2" maxlength="120" placeholder="省市区 + 详细地址"></textarea></div>' +
+                '<div class="hint">兑换后积分立即扣除，可在下方「我的兑换记录」查看发货进度。</div>';
+        } else {
+            body = '<p>确认使用积分兑换「' + PC.escapeHtml(name) + '」？</p>' +
+                '<div class="hint">虚拟奖励兑换后立即到账。</div>';
+        }
+        PC.modal('确认兑换', body, function (mask) {
+            var payload = { productId: productId };
+            if (physical) {
+                payload.receiverName = (mask.querySelector('#rcv-name').value || '').trim();
+                payload.receiverPhone = (mask.querySelector('#rcv-phone').value || '').trim();
+                payload.receiverAddress = (mask.querySelector('#rcv-addr').value || '').trim();
+                if (!payload.receiverName) { PC.toast('请填写收货人'); return false; }
+                if (!/^1\d{10}$/.test(payload.receiverPhone)) { PC.toast('请填写正确的 11 位手机号'); return false; }
+                if (payload.receiverAddress.length < 5) { PC.toast('请填写完整收货地址'); return false; }
+            }
+            PC.api.post('mall/exchange', payload).then(function (order) {
+                PC.toast('兑换成功，消耗 ' + order.pointsCost + ' 积分');
+                loadMe();
+                loadProducts();
+                loadOrders();
+            }).catch(function (e) { PC.toast(e.message); });
+            return true;
+        }, '确认兑换');
+    }
+
+    function loadDecorations() {
+        PC.api.get('mall/decorations').then(function (list) {
+            var host = document.getElementById('decoration-list');
+            if (!list || !list.length) { host.innerHTML = PC.empty('暂无装扮'); return; }
+            host.innerHTML = list.map(function (d) {
+                var action = d.wearing ? '<button class="btn btn-sm btn-line btn-block" data-unwear="' + d.id + '">卸下</button>'
+                    : d.owned ? '<button class="btn btn-sm btn-block" data-wear="' + d.id + '">佩戴</button>'
+                        : '<button class="btn btn-sm btn-block" data-buydec="' + d.id + '">' + d.price + ' 积分购买</button>';
+                /* 头像框用真实素材叠加预览，头衔用标签预览，让用户先看到效果再决定买 */
+                var preview;
+                if (d.type === 'AVATAR_FRAME' && d.resourceUrl) {
+                    preview = '<div class="deco-preview">' +
+                        '<span class="deco-avatar">派</span>' +
+                        '<img src="' + PC.asset(d.resourceUrl) + '" alt="' + PC.escapeHtml(d.name) + '">' +
+                        '</div>';
+                } else {
+                    preview = '<div class="deco-title-preview"><span class="tag">' + PC.escapeHtml(d.name.replace('头衔·', '')) + '</span></div>';
+                }
+                return '<div class="card" style="margin:0;padding:14px;text-align:center">' +
+                    preview +
+                    '<div style="font-weight:700">' + PC.escapeHtml(d.name) + '</div>' +
+                    '<div class="hint" style="min-height:34px">' + PC.escapeHtml(decoTypeText(d.type)) + ' · ' +
+                    (d.owned ? (d.wearing ? '当前佩戴中' : '已拥有') : '尚未拥有') + '</div>' +
+                    action + '</div>';
+            }).join('');
+            host.querySelectorAll('[data-buydec]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    PC.api.post('mall/decorations/' + b.getAttribute('data-buydec') + '/buy').then(function () {
+                        PC.toast('购买成功，点「佩戴」即可生效');
+                        PC.refreshMe();
+                        loadMe(); loadDecorations();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+            host.querySelectorAll('[data-wear]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    PC.api.post('mall/decorations/' + b.getAttribute('data-wear') + '/wear').then(function () {
+                        PC.toast('已佩戴，个人主页头像框已更新');
+                        PC.refreshMe();
+                        loadDecorations();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+            host.querySelectorAll('[data-unwear]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    PC.api.del('mall/decorations/' + b.getAttribute('data-unwear') + '/wear').then(function () {
+                        PC.toast('已卸下');
+                        PC.refreshMe();
+                        loadDecorations();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+        }).catch(function (e) { document.getElementById('decoration-list').innerHTML = PC.empty(e.message); });
+    }
+
+    function loadOrders() {
+        if (!PC.Store.token()) { document.getElementById('order-list').innerHTML = PC.empty('登录后查看'); return; }
+        PC.api.get('mall/orders/mine', { page: 1, size: 20 }).then(function (data) {
+            var host = document.getElementById('order-list');
+            if (!data.items || !data.items.length) { host.innerHTML = PC.empty('还没有兑换记录'); return; }
+            host.innerHTML = data.items.map(function (o) {
+                var extra = '';
+                if (o.receiverName || o.receiverAddress) {
+                    extra += '<div class="sub">收货：' + PC.escapeHtml(o.receiverName || '') + ' ' +
+                        PC.escapeHtml(o.receiverPhone || '') + ' · ' + PC.escapeHtml(o.receiverAddress || '') + '</div>';
+                }
+                if (o.logisticsNo) {
+                    extra += '<div class="sub">物流单号：' + PC.escapeHtml(o.logisticsNo) + '</div>';
+                }
+                var actions = '';
+                if (o.status === 'CREATED' || o.status === 'PENDING') {
+                    actions = '<button class="btn btn-sm btn-line" data-cancel="' + o.id + '">取消兑换</button>';
+                } else if (o.status === 'SHIPPED') {
+                    actions = '<button class="btn btn-sm" data-finish="' + o.id + '">确认收货</button>';
+                }
+                var tagClass = (o.status === 'CANCELED' || o.status === 'REJECTED') ? 'tag' : 'tag tag-ok';
+                return '<div class="row" style="align-items:flex-start">' +
+                    '<div class="grow"><div class="name">' + PC.escapeHtml(o.productName) + '</div>' +
+                    '<div class="sub">' + PC.fmtTime(o.createdAt) + '</div>' + extra + '</div>' +
+                    '<span class="badge">-' + o.pointsCost + '</span>' +
+                    '<span class="' + tagClass + '">' + PC.escapeHtml(orderStatusText(o.status)) + '</span>' +
+                    actions + '</div>';
+            }).join('');
+            host.querySelectorAll('[data-cancel]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    if (!confirm('取消后积分会退回，确认取消该兑换？')) { return; }
+                    PC.api.post('mall/orders/' + b.getAttribute('data-cancel') + '/cancel').then(function () {
+                        PC.toast('已取消，积分已退回');
+                        loadMe(); loadProducts(); loadOrders();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+            host.querySelectorAll('[data-finish]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    PC.api.post('mall/orders/' + b.getAttribute('data-finish') + '/finish').then(function () {
+                        PC.toast('已确认收货');
+                        loadOrders();
+                    }).catch(function (e) { PC.toast(e.message); });
+                });
+            });
+        }).catch(function () {});
+    }
+
+    document.getElementById('btn-search').addEventListener('click', function () { page = 1; loadProducts(); });
+    document.getElementById('type').addEventListener('change', function () { page = 1; loadProducts(); });
+
+    var tip = document.getElementById('points-tip');
+    if (tip) {
+        tip.innerHTML = '积分获取：每日签到 <b>+10</b> · 发帖 <b>+5</b> · 评论 <b>+2</b> · ' +
+            '收到的点赞 <b>+2</b> · 帖子被收藏 <b>+3</b> · 小游戏破纪录 <b>+5</b>';
+    }
+
+    loadMe();
+    loadProducts();
+    loadDecorations();
+    loadOrders();
+</script>
+</body>
+</html>

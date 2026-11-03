@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<persistence xmlns="https://jakarta.ee/xml/ns/persistence"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xsi:schemaLocation="https://jakarta.ee/xml/ns/persistence https://jakarta.ee/xml/ns/persistence/persistence_3_2.xsd"
+             version="3.2">
+
+    <!--
+      统一使用 JNDI 数据源 java:jboss/datasources/PaimonDS：
+        - 本地开发：MySQL 8.0（scripts/setup-mysql-datasource.cli 创建）
+        - 云端演示：H2 文件库（scripts/cloud-h2-datasource.cli 创建）
+      应用代码不感知具体数据库，方言由 Hibernate 自动探测。
+    -->
+    <persistence-unit name="gcPU" transaction-type="JTA">
+        <jta-data-source>java:jboss/datasources/PaimonDS</jta-data-source>
+        <exclude-unlisted-classes>false</exclude-unlisted-classes>
+        <properties>
+            <!--
+              默认 update：本地开发与首次部署能自动建表补列。
+              生产环境建议用 -Dpaimon.hbm2ddl=validate（或环境变量 PAIMON_HBM2DDL=validate）
+              把建表权交给 DBA 脚本，避免应用自动改表结构。
+            -->
+            <property name="hibernate.hbm2ddl.auto" value="${paimon.hbm2ddl:update}"/>
+            <property name="hibernate.show_sql" value="false"/>
+            <property name="hibernate.format_sql" value="false"/>
+            <property name="hibernate.jdbc.batch_size" value="30"/>
+            <property name="hibernate.order_inserts" value="true"/>
+            <property name="hibernate.order_updates" value="true"/>
+            <property name="hibernate.connection.autocommit" value="false"/>
+        </properties>
+    </persistence-unit>
+</persistence>
